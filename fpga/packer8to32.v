@@ -6,11 +6,11 @@ module packer8to32 #(
 )
 (
 	input 						clk,
-	input 						rst_n,
+	input 						rst_a,
 	input 						valid_i,
 	input  [LVDS_LEN-1:0] 	data_i,
-	output 						valid_o, 	// Выходной сигнал для записи в FIFO
-	output [DATA_LEN-1:0] 	data_o			// Данные в FIFO
+	output 						valid_o, 	// output valid signal to FIFO
+	output [DATA_LEN-1:0] 	data_o		// output data to FIFO
     );
 
 	reg [23:0] data_ff;
@@ -18,11 +18,11 @@ module packer8to32 #(
 	reg [1:0] 	byte_counter;
 	reg 			valid_byte;
 	
-	always @(posedge clk or negedge rst_n) begin
-		if (!rst_n) begin
+	always @(posedge clk or posedge rst_a) begin
+		if (rst_a) begin
 			byte_counter 	<= 2'd0;
 			valid_byte 		<= 1'b0;
-			data_ff 			<= 32'd0;
+			data_ff 			<= 24'd0;
 			data_ff_o 	<= 32'd0;
 		end
 		else begin

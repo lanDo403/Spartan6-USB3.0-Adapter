@@ -3,27 +3,36 @@
 module fifo_dualport#(
 	parameter DATA_LEN = 32,
 	parameter DEPTH = 1024,
-	parameter ADDR_LEN = $clog2(DEPTH)
+	parameter ADDR_LEN = $clog2(DEPTH),
+	parameter USE_UNDERFLOW = 1
 )(
 	input 						clk_wr,
 	input							clk_rd,
+	input 						rst_a,
 	input 						rst_n,			
-	input 						wen_i, // Разрешение на запись в память после упаковщика	
-	input 						ren_i,  // Разрешение на чтение из FT601
-	input [DATA_LEN-1:0] 	sram_data_r, // Данные, которые читаются из памяти
-	input [DATA_LEN-1:0] 	data_i,	// Данные, поступившие извне, которые еще не в памяти, но должны записаться туда
-	output [DATA_LEN-1:0]  	data_o, // Данные, которые попадут в FSM -> FT601
-	output [DATA_LEN-1:0]	sram_data_w, // Данные, которые записываются в память
-	output 						wen_o, // Разрешение на запись в память
-	output 						ren_o, // Разрешение на чтение в память
+	input 						wen_i, // write enable from packer8to32	
+	input 						ren_i,  // read enable from FT601
+	input [DATA_LEN-1:0] 	sram_data_r,
+	input [DATA_LEN-1:0] 	data_i,
+	output [DATA_LEN-1:0]  	data_o,
+	output [DATA_LEN-1:0]	sram_data_w, 
+	output 						wen_o, // write enable to memory
+	output 						ren_o, // read enable to memory
 	output [ADDR_LEN-1:0]	wr_addr_o,
 	output [ADDR_LEN-1:0]	rd_addr_o,
 	output 						full,			
-	output 						empty		
+	output 						empty,
+	output 						overflow,
+	output 						underflow		
     ); 
 	 
-	reg [DATA_LEN-1:0] wr_data;
+	//reg [DATA_LEN-1:0] wr_data;
 	//reg [DATA_LEN-1:0] rd_data;
+	reg full_ff;
+	reg empty_ff;
+	reg overflow_ff;
+	wire full_next_w, empty_next_r;
+	wire underflow_w;
 	
 	reg [ADDR_LEN:0] wr_ptr_bin, wr_ptr_bin_next;
 	reg [ADDR_LEN:0] rd_ptr_bin, rd_ptr_bin_next;
@@ -33,55 +42,63 @@ module fifo_dualport#(
 	reg [ADDR_LEN:0] wr_ptr_gray_sync1, wr_ptr_gray_sync2;
 	reg [ADDR_LEN:0] rd_ptr_gray_sync1, rd_ptr_gray_sync2;
 	
+	reg wen_do, ren_do;
 	//-------------------------------------------------------------
-	// Указатели на запись(адрес и грея)
+	// Write domain pointers (gray pointers and address)
 	//-------------------------------------------------------------
-	always @(posedge clk_wr or negedge rst_n) begin
-		if (!rst_n) begin
+	always @(posedge clk_wr or posedge rst_a) begin
+		if (rst_a) begin
 			wr_ptr_bin <= 0;
 			wr_ptr_gray <= 0;
+			full_ff <= 0;
+			overflow_ff <= 1'b0;
 		end
 		else begin
 			wr_ptr_bin <= wr_ptr_bin_next;
 			wr_ptr_gray <= wr_ptr_gray_next;
-			if (wen_i && !full)
-				wr_data <= data_i;
+			full_ff <= full_next_w;
+			if (wen_i && full_ff)
+				overflow_ff <= 1'b1;
+			// if (wen_i && !full)
+			// 	wr_data <= data_i;
 		end
 	end
 	
 	always @(*) begin
-		wr_ptr_bin_next = wr_ptr_bin + (wen_i & !full);
+		wen_do = wen_i & ~full;
+		wr_ptr_bin_next = wr_ptr_bin + {{ADDR_LEN{1'b0}}, wen_do};
 		wr_ptr_gray_next = (wr_ptr_bin_next >> 1) ^ wr_ptr_bin_next;
 	end
 	
 	//-------------------------------------------------------------
-	// Указатели на чтение(адрес и грея)
+	// Read domain pointers (gray pointers and address)
 	//-------------------------------------------------------------
 	always @(posedge clk_rd or negedge rst_n) begin
 		if (!rst_n) begin
 			rd_ptr_bin <= 0;
 			rd_ptr_gray <= 0;
+			empty_ff <= 1;
 		end
 		else begin
 			rd_ptr_bin <= rd_ptr_bin_next;
 			rd_ptr_gray <= rd_ptr_gray_next;
-			/*
-			if (!rd_en_i && !empty)
-				rd_data <= sram_data_r;
-			*/
+			empty_ff <= empty_next_r;
+			// if (!rd_en_i && !empty)
+			//	rd_data <= sram_data_r;
 		end
 	end
 	
 	always @(*) begin
-		rd_ptr_bin_next = rd_ptr_bin + (ren_i & !empty);
+		ren_do = ren_i & ~empty;
+		rd_ptr_bin_next = rd_ptr_bin + {{ADDR_LEN{1'b0}}, ren_do};
 		rd_ptr_gray_next = (rd_ptr_bin_next >> 1) ^ rd_ptr_bin_next;
 	end
 	
 	//-------------------------------------------------------------
-	// Синхронизация указателей грея
+	// Syncronization gray pointers
 	//-------------------------------------------------------------
-	always @(posedge clk_wr or negedge rst_n) begin
-		if (!rst_n) begin
+	always @(posedge clk_wr or posedge rst_a) begin
+		if (rst_a) begin
 			rd_ptr_gray_sync1 <= 0;
 			rd_ptr_gray_sync2 <= 0;
 		end
@@ -103,17 +120,41 @@ module fifo_dualport#(
 	end
 	
 	//-------------------------------------------------------------
-	// Логика выходных сигналов
+	// Output signals
 	//-------------------------------------------------------------
-	assign empty 	= (rd_ptr_gray == wr_ptr_gray_sync2);
-	assign full 	= (wr_ptr_gray_next == {~rd_ptr_gray_sync2[ADDR_LEN:ADDR_LEN-1], rd_ptr_gray_sync2[ADDR_LEN-2:0]});
+	assign empty_next_r = (rd_ptr_gray_next == wr_ptr_gray_sync2);
+	assign full_next_w  = (wr_ptr_gray_next == {~rd_ptr_gray_sync2[ADDR_LEN:ADDR_LEN-1], rd_ptr_gray_sync2[ADDR_LEN-2:0]});
 	
-	assign wen_o = wen_i & ~full;
-	assign ren_o = ~(ren_i & ~empty);
+	assign full = full_ff;
+	assign empty = empty_ff;
+	assign overflow = overflow_ff;
+	assign wen_o = wen_do;
+	assign ren_o = ren_do;
 	assign wr_addr_o = wr_ptr_bin[ADDR_LEN-1:0];
 	assign rd_addr_o = rd_ptr_bin[ADDR_LEN-1:0];
-	assign sram_data_w = wr_data;
+	assign sram_data_w = data_i;
+	// assign sram_data_w = wr_data;
 	// assign data_o = rd_data;
 	assign data_o = sram_data_r;
+	
+	generate
+		if (USE_UNDERFLOW) begin : gen_underflow
+			reg underflow_ff;
+			
+			always @(posedge clk_rd or negedge rst_n) begin
+				if (!rst_n)
+					underflow_ff <= 1'b0;
+				else if (ren_i && empty_ff)
+					underflow_ff <= 1'b1;
+			end
+			
+			assign underflow_w = underflow_ff;
+		end
+		else begin : gen_no_underflow
+			assign underflow_w = 1'b0;
+		end
+	endgenerate
+	
+	assign underflow = underflow_w;
 
 endmodule
