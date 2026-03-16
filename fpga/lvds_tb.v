@@ -1,4 +1,4 @@
-﻿`timescale 1ns / 1ps
+`timescale 1ns / 1ps
 `include "LVDS.v"
 `include "packer8to32.v"
 `include "fifo_dualport.v"
@@ -43,6 +43,8 @@ module lvds_tb;
    reg                  fpga_reset;
    reg                  rst_n;
    reg  [LVDS_LEN-1:0]  data_p;
+   reg  [LVDS_LEN-1:0]  lvds_exp_data;
+   reg                  lvds_exp_strob;
 
    reg                  auto_read_en;
    reg                  manual_rd_req;
@@ -77,6 +79,8 @@ module lvds_tb;
    integer fsm_tx_words_n;
    integer fsm_rx_words_n;
    integer fsm_rd_pulses_n;
+   reg     fsm_tx_gap_error;
+   reg     fsm_rx_gap_error;
 
    // Clock generators (tb_clock 50 MHz, tb_ft_clk 100 MHz)
    always #10 tb_clock  = ~tb_clock;
@@ -89,6 +93,8 @@ module lvds_tb;
       fpga_reset      = 1'b0;
       rst_n           = 1'b0;
       data_p          = 8'h00;
+      lvds_exp_data   = 8'h00;
+      lvds_exp_strob  = 1'b0;
       auto_read_en    = 1'b0;
       manual_rd_req   = 1'b0;
       lvds_check_en   = 1'b0;
@@ -103,6 +109,8 @@ module lvds_tb;
       ft_rx_data      = 32'd0;
       ft_rx_be        = 4'd0;
       fsm_rx_exp_n    = 0;
+      fsm_tx_gap_error = 1'b0;
+      fsm_rx_gap_error = 1'b0;
    end
 
    // =========================================================
@@ -237,6 +245,7 @@ module lvds_tb;
    task tb_reset;
       integer n;
       begin
+         @(negedge tb_clock);
          auto_read_en    = 1'b0;
          manual_rd_req   = 1'b0;
          lvds_check_en   = 1'b0;
@@ -251,10 +260,14 @@ module lvds_tb;
          ft_rx_data      = 32'd0;
          ft_rx_be        = 4'd0;
          fsm_rx_exp_n    = 0;
+         fsm_tx_gap_error = 1'b0;
+         fsm_rx_gap_error = 1'b0;
          rst_n           = 1'b0;
          fpga_reset      = 1'b1;
          tb_strob        = 1'b0;
          data_p          = 8'h00;
+         lvds_exp_data   = 8'h00;
+         lvds_exp_strob  = 1'b0;
 
          for (n = 0; n < 4; n = n + 1)
             @(posedge tb_clock);
@@ -267,6 +280,7 @@ module lvds_tb;
          for (n = 0; n < 2; n = n + 1)
             @(posedge tb_ft_clk);
 
+         @(negedge tb_clock);
          lvds_check_en = 1'b1;
       end
    endtask
@@ -276,6 +290,8 @@ module lvds_tb;
       integer i;
       begin
          fd_p = $fopen("data_p", "r");
+         if (fd_p == 0)
+            fd_p = $fopen("fpga/data_p", "r");
          if (fd_p == 0) begin
             $display("ERROR: cannot open data_p");
             #1000;
@@ -359,8 +375,10 @@ module lvds_tb;
    task send_one_byte(input [7:0] bp, input strobe);
       begin
          @(negedge tb_clock);
-         data_p   = bp;
-         tb_strob = strobe;
+         data_p        = bp;
+         tb_strob      = strobe;
+         lvds_exp_data = bp;
+         lvds_exp_strob = strobe;
       end
    endtask
 
@@ -387,6 +405,7 @@ module lvds_tb;
 
          @(negedge tb_clock);
          tb_strob = 1'b0;
+         lvds_exp_strob = 1'b0;
       end
    endtask
 
@@ -405,6 +424,7 @@ module lvds_tb;
 
          @(negedge tb_clock);
          tb_strob = 1'b0;
+         lvds_exp_strob = 1'b0;
       end
    endtask
 
@@ -546,12 +566,13 @@ module lvds_tb;
       end
    endtask
 
-   task drive_fsm_rx_word(input [31:0] word_i, input [BE_LEN-1:0] be_i);
+   task drive_fsm_rx_burst(input integer words_n);
+      integer idx;
       integer timeout;
       begin
          @(negedge tb_ft_clk);
-         ft_rx_data = word_i;
-         ft_rx_be   = be_i;
+         ft_rx_data = fsm_rx_exp_data[0];
+         ft_rx_be   = fsm_rx_exp_be[0];
          ft_rxf_n   = 1'b0;
 
          timeout = 0;
@@ -559,17 +580,23 @@ module lvds_tb;
             @(posedge tb_ft_clk);
             timeout = timeout + 1;
             if (timeout > 32) begin
-               $display("ERROR: fifo_fsm did not assert RD_N for RX word %h", word_i);
+               $display("ERROR: fifo_fsm did not assert RD_N for RX burst start");
                $stop;
             end
          end
 
+         for (idx = 1; idx < words_n; idx = idx + 1) begin
+            @(posedge tb_ft_clk);
+            ft_rx_data = fsm_rx_exp_data[idx];
+            ft_rx_be   = fsm_rx_exp_be[idx];
+         end
+
          timeout = 0;
-         while (fsm_fifo_append !== 1'b1) begin
+         while (fsm_rx_words_n < words_n) begin
             @(posedge tb_ft_clk);
             timeout = timeout + 1;
-            if (timeout > 32) begin
-               $display("ERROR: fifo_fsm did not append RX word %h", word_i);
+            if (timeout > 64) begin
+               $display("ERROR: fifo_fsm did not complete RX burst");
                $stop;
             end
          end
@@ -675,6 +702,10 @@ module lvds_tb;
             $display("ERROR: FIFO is not empty after fifo_fsm TX test");
             $stop;
          end
+         if (fsm_tx_gap_error) begin
+            $display("ERROR: fifo_fsm inserted a gap inside TX burst");
+            $stop;
+         end
          if (fsm_rd_pulses_n != 0) begin
             $display("ERROR: fifo_fsm must not read FT601 during TX-only test");
             $stop;
@@ -734,9 +765,7 @@ module lvds_tb;
          fsm_rx_exp_data[2]   = 32'h55AA1234;
          fsm_rx_exp_be[2]     = 4'hC;
 
-         drive_fsm_rx_word(fsm_rx_exp_data[0], fsm_rx_exp_be[0]);
-         drive_fsm_rx_word(fsm_rx_exp_data[1], fsm_rx_exp_be[1]);
-         drive_fsm_rx_word(fsm_rx_exp_data[2], fsm_rx_exp_be[2]);
+         drive_fsm_rx_burst(fsm_rx_exp_n);
 
          wait_ft_cycles(6);
 
@@ -746,6 +775,10 @@ module lvds_tb;
          end
          if (fsm_rd_pulses_n !== fsm_rx_exp_n) begin
             $display("ERROR: fifo_fsm RD_N pulse count got=%0d expected=%0d", fsm_rd_pulses_n, fsm_rx_exp_n);
+            $stop;
+         end
+         if (fsm_rx_gap_error) begin
+            $display("ERROR: fifo_fsm inserted a gap inside RX burst");
             $stop;
          end
       end
@@ -790,12 +823,12 @@ module lvds_tb;
             $display("ERROR: LVDS clock output does not follow input clock");
             $stop;
          end
-         if (DataOUT !== data_p) begin
-            $display("ERROR: LVDS data mismatch. got=%h expected=%h", DataOUT, data_p);
+         if (DataOUT !== lvds_exp_data) begin
+            $display("ERROR: LVDS data mismatch. got=%h expected=%h", DataOUT, lvds_exp_data);
             $stop;
          end
-         if (StrobOUT !== tb_strob) begin
-            $display("ERROR: LVDS strobe mismatch. got=%b expected=%b", StrobOUT, tb_strob);
+         if (StrobOUT !== lvds_exp_strob) begin
+            $display("ERROR: LVDS strobe mismatch. got=%b expected=%b", StrobOUT, lvds_exp_strob);
             $stop;
          end
       end
@@ -839,12 +872,22 @@ module lvds_tb;
          fsm_tx_words_n <= 0;
          fsm_rx_words_n <= 0;
          fsm_rd_pulses_n <= 0;
+         fsm_tx_gap_error <= 1'b0;
+         fsm_rx_gap_error <= 1'b0;
       end
       else begin
+         if (fsm_tx_check_en && (fsm_tx_words_n > 0) && (fsm_tx_words_n < exp_words_n) &&
+             (ft_txe_n == 1'b0) && (fsm_wr_n != 1'b0))
+            fsm_tx_gap_error <= 1'b1;
+
          if (fsm_tx_check_en && !fsm_wr_n) begin
             expect_fsm_tx_word(fsm_tx_words_n, fsm_tx_data, fsm_tx_be);
             fsm_tx_words_n <= fsm_tx_words_n + 1;
          end
+
+         if (fsm_rx_check_en && (fsm_rx_words_n > 0) && (fsm_rx_words_n < fsm_rx_exp_n) &&
+             (ft_rxf_n == 1'b0) && (ft_full_fifo == 1'b0) && (fsm_rd_n != 1'b0))
+            fsm_rx_gap_error <= 1'b1;
 
          if (fsm_rx_check_en && !fsm_rd_n) begin
             if (fsm_oe_n !== 1'b0) begin
