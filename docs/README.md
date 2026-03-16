@@ -1,4 +1,4 @@
-﻿# Проект `logic_analyzer`: GPIO/LVDS -> FIFO -> FT601
+GPIO -> FIFO -> FT601
 
 ## Назначение документа
 
