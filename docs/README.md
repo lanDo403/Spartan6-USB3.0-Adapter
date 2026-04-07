@@ -350,9 +350,3 @@ Testbench должен запускаться в двух вариантах:
 - старт TX пока медленнее, чем в reference design FTDI
 - в reference FTDI TX prefetch реализован чище, чем в текущем локальном варианте
 - для GPIO входа задано ограничение по периоду такта, но нет формализованного внешнего timing contract для `GPIO_DATA` и `GPIO_STROB`
-
-## Справочные материалы
-
-- datasheet FT600/FT601
-- FTDI AN_421 FIFO Bus Master for FT60x
-- FTDI reference design в `docs/spartan6_mst_fifo32_1.1/`
