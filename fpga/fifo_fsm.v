@@ -12,10 +12,13 @@ module fifo_fsm
 	input  						txe_n,		// Trancieve empty from FT601 
 	input  						rxf_n,		// Recieve full from FT601
 	input  [DATA_LEN-1:0]   	data_i,	// Data from FIFO
+	input  [BE_LEN-1:0]      tx_be_i,   // Byte enable from selected TX source
 	input  [DATA_LEN-1:0]   	rx_data,		// Data from FT601
 	input  [BE_LEN-1:0] 		be_i,			// Byte enable from FT601
 	input 						full_fifo,
 	input 						empty_fifo,
+	input                  tx_clear_i,
+	input                  tx_prefetch_en_i,
 	
 	output [DATA_LEN-1:0] 		data_o,		// DATA
 	output [DATA_LEN-1:0]  		tx_data,		// Data to FT601
@@ -41,13 +44,12 @@ module fifo_fsm
 	reg [DATA_LEN-1:0] tx_stage_ff;
 	reg [DATA_LEN-1:0] tx_prefetch_ff;
 	reg [DATA_LEN-1:0] tx_data_ff;
+	reg [BE_LEN-1:0]   tx_stage_be_ff;
+	reg [BE_LEN-1:0]   tx_prefetch_be_ff;
 	reg [DATA_LEN-1:0] rx_data_ff;
 	reg [BE_LEN-1:0] be_i_ff;
 	reg [BE_LEN-1:0] be_o_ff;
 	
-	reg wr_ff;
-	reg rd_ff;
-	reg oe_ff;
 	reg drive_tx_ff;
 	reg fifo_append_ff;
 	
@@ -55,7 +57,6 @@ module fifo_fsm
 	reg tx_prefetch_valid_ff;
 	reg tx_prefetch_pending_ff;
 	
-	reg txe_n_p1;
 	reg rxf_n_p1;
 
 	wire rx_cond_w;
@@ -64,17 +65,24 @@ module fifo_fsm
 	wire tx_burst_w;
 	wire tx_send_w;
 	wire fifo_pop_w;
+	wire wr_w;
+	wire rd_w;
+	wire oe_w;
 	
 	assign rx_cond_w  		= !rxf_n_p1 && !full_fifo;
 	assign rx_burst_keep_w  = !rxf_n && !full_fifo;
 	assign tx_req_w   		= !txe_n && tx_data_valid_ff;
-	assign tx_burst_w		= !txe_n_p1 && tx_data_valid_ff;
+	assign tx_burst_w		= !txe_n && tx_data_valid_ff;
 	assign tx_send_w        = (state == TX_BURST) && !txe_n && tx_data_valid_ff;
-	assign fifo_pop_w       = !empty_fifo && (
+	assign fifo_pop_w       = tx_prefetch_en_i && !empty_fifo && (
 	                          (!tx_data_valid_ff && !tx_prefetch_pending_ff) ||
 	                          ( tx_data_valid_ff && !tx_prefetch_valid_ff && !tx_prefetch_pending_ff) ||
 	                          ((state == TX_BURST) && tx_send_w)
 	                         );
+	assign wr_w            = !((state == TX_BURST) && tx_data_valid_ff && !txe_n);
+	assign rd_w            = !((state == RX_BURST) && !full_fifo && !rxf_n);
+	assign oe_w            = !(((state == RX_START) && !full_fifo) ||
+	                          ((state == RX_BURST) && !full_fifo && !rxf_n));
 	
 	
 	//-------------------------------------------------------------
@@ -104,11 +112,9 @@ module fifo_fsm
 	//-------------------------------------------------------------
 	always @(posedge clk) begin
 		if (!rst_n) begin
-			txe_n_p1 <= 1'b1;
 			rxf_n_p1 <= 1'b1;
 		end
 		else begin
-			txe_n_p1 <= txe_n;
 			rxf_n_p1 <= rxf_n;
 		end
 	end
@@ -120,6 +126,17 @@ module fifo_fsm
 		if (!rst_n) begin
 			tx_stage_ff            <= {DATA_LEN{1'b0}};
 			tx_prefetch_ff         <= {DATA_LEN{1'b0}};
+			tx_stage_be_ff         <= {BE_LEN{1'b0}};
+			tx_prefetch_be_ff      <= {BE_LEN{1'b0}};
+			tx_prefetch_pending_ff <= 1'b0;
+			tx_prefetch_valid_ff   <= 1'b0;
+			tx_data_valid_ff       <= 1'b0;
+		end
+		else if (tx_clear_i) begin
+			tx_stage_ff            <= {DATA_LEN{1'b0}};
+			tx_prefetch_ff         <= {DATA_LEN{1'b0}};
+			tx_stage_be_ff         <= {BE_LEN{1'b0}};
+			tx_prefetch_be_ff      <= {BE_LEN{1'b0}};
 			tx_prefetch_pending_ff <= 1'b0;
 			tx_prefetch_valid_ff   <= 1'b0;
 			tx_data_valid_ff       <= 1'b0;
@@ -128,9 +145,11 @@ module fifo_fsm
 			if (tx_send_w) begin
 				if (tx_prefetch_valid_ff) begin
 					tx_stage_ff       <= tx_prefetch_ff;
+					tx_stage_be_ff    <= tx_prefetch_be_ff;
 					tx_data_valid_ff  <= 1'b1;
 					if (tx_prefetch_pending_ff) begin
 						tx_prefetch_ff       <= data_i;
+						tx_prefetch_be_ff    <= tx_be_i;
 						tx_prefetch_valid_ff <= 1'b1;
 					end
 					else
@@ -138,6 +157,7 @@ module fifo_fsm
 				end
 				else if (tx_prefetch_pending_ff) begin
 					tx_stage_ff      <= data_i;
+					tx_stage_be_ff   <= tx_be_i;
 					tx_data_valid_ff <= 1'b1;
 				end
 				else begin
@@ -148,10 +168,12 @@ module fifo_fsm
 			else if (tx_prefetch_pending_ff) begin
 				if (!tx_data_valid_ff) begin
 					tx_stage_ff      <= data_i;
+					tx_stage_be_ff   <= tx_be_i;
 					tx_data_valid_ff <= 1'b1;
 				end
 				else begin
 					tx_prefetch_ff       <= data_i;
+					tx_prefetch_be_ff    <= tx_be_i;
 					tx_prefetch_valid_ff <= 1'b1;
 				end
 			end
@@ -171,9 +193,23 @@ module fifo_fsm
 			tx_data_ff <= {DATA_LEN{1'b0}};
 			be_o_ff    <= {BE_LEN{1'b0}};
 		end
-		else if (tx_send_w) begin
+		else if (tx_clear_i) begin
+			tx_data_ff <= {DATA_LEN{1'b0}};
+			be_o_ff    <= {BE_LEN{1'b0}};
+		end
+		else if ((state == TX_PREFETCH) && tx_burst_w) begin
 			tx_data_ff <= tx_stage_ff;
-			be_o_ff    <= {BE_LEN{1'b1}};
+			be_o_ff    <= tx_stage_be_ff;
+		end
+		else if (tx_send_w) begin
+			if (tx_prefetch_valid_ff) begin
+				tx_data_ff <= tx_prefetch_ff;
+				be_o_ff    <= tx_prefetch_be_ff;
+			end
+			else if (tx_prefetch_pending_ff) begin
+				tx_data_ff <= data_i;
+				be_o_ff    <= tx_be_i;
+			end
 		end
 	end
 	
@@ -185,7 +221,11 @@ module fifo_fsm
 			rx_data_ff <= {DATA_LEN{1'b0}};
 			be_i_ff    <= {BE_LEN{1'b0}};
 		end
-		else if ((state == RX_BURST) && !rxf_n_p1 && !full_fifo) begin
+		else if ((state == RX_START) && !rxf_n_p1 && !full_fifo) begin
+			rx_data_ff <= rx_data;
+			be_i_ff    <= be_i;
+		end
+		else if ((state == RX_BURST) && !rxf_n && !full_fifo) begin
 			rx_data_ff <= rx_data;
 			be_i_ff    <= be_i;
 		end
@@ -195,39 +235,35 @@ module fifo_fsm
 	//-------------------------------------------------------------
 	always @(posedge clk) begin
 		if (!rst_n) begin
-			wr_ff         <= 1'b1;
-			rd_ff         <= 1'b1;
-			oe_ff         <= 1'b1;
 			drive_tx_ff   <= 1'b0;
 			fifo_append_ff<= 1'b0;
 		end
 		else begin
-			wr_ff          <= 1'b1;
-			rd_ff          <= 1'b1;
-			oe_ff          <= 1'b1;
 			drive_tx_ff    <= 1'b0;
 			fifo_append_ff <= 1'b0;
 
 			case (state)
-				TX_BURST: begin
-					if (!txe_n && tx_data_valid_ff) begin
+				TX_PREFETCH: begin
+					if (tx_data_valid_ff)
 						drive_tx_ff <= 1'b1;
-						wr_ff       <= 1'b0;
-					end
+				end
+
+				TX_BURST: begin
+					if (tx_data_valid_ff)
+						drive_tx_ff <= 1'b1;
 				end
 
 				RX_START: begin
-					if (!full_fifo)
-						oe_ff <= 1'b0;
+					if (!rxf_n_p1 && !full_fifo)
+						fifo_append_ff <= 1'b1;
 				end
 
 				RX_BURST: begin
-					if (!full_fifo && !rxf_n) begin
-						oe_ff <= 1'b0;
-						rd_ff <= 1'b0;
-					end
-					if (!rxf_n_p1 && !full_fifo)
+					if (!rxf_n && !full_fifo)
 						fifo_append_ff <= 1'b1;
+				end
+
+				default: begin
 				end
 			endcase
 		end
@@ -238,9 +274,9 @@ module fifo_fsm
 	assign data_o      = rx_data_ff;
 	assign be_o        = be_o_ff;
 	assign fifo_be     = be_i_ff;
-	assign wr_n        = wr_ff;
-	assign rd_n        = rd_ff;
-	assign oe_n        = oe_ff;
+	assign wr_n        = wr_w;
+	assign rd_n        = rd_w;
+	assign oe_n        = oe_w;
 	assign drive_tx    = drive_tx_ff;
 	assign fifo_pop    = fifo_pop_w;
 	assign fifo_append = fifo_append_ff;

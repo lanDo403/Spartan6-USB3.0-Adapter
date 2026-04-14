@@ -35,6 +35,11 @@ module ft601_io #(
 	input  [DATA_LEN-1:0]     tx_data_i
 );
 
+	wire txe_n_ibuf;
+	wire rxf_n_ibuf;
+	(* IOB = "TRUE" *) reg txe_n_ff;
+	(* IOB = "TRUE" *) reg rxf_n_ff;
+
 	//-------------------------------------------------------------
 	// Buffered inputs from FT601
 	//-------------------------------------------------------------
@@ -56,15 +61,29 @@ module ft601_io #(
 		.IOSTANDARD("LVCMOS33")
 	) ibuf_txe_n (
 		.I(TXE_N),
-		.O(txe_n_o)
+		.O(txe_n_ibuf)
 	);
 
 	IBUF #(
 		.IOSTANDARD("LVCMOS33")
 	) ibuf_rxf_n (
 		.I(RXF_N),
-		.O(rxf_n_o)
+		.O(rxf_n_ibuf)
 	);
+
+	always @(posedge clk_o or negedge reset_n_o) begin
+		if (!reset_n_o) begin
+			txe_n_ff <= 1'b1;
+			rxf_n_ff <= 1'b1;
+		end
+		else begin
+			txe_n_ff <= txe_n_ibuf;
+			rxf_n_ff <= rxf_n_ibuf;
+		end
+	end
+
+	assign txe_n_o = txe_n_ff;
+	assign rxf_n_o = rxf_n_ff;
 
 	//-------------------------------------------------------------
 	// Buffered FT601 control outputs

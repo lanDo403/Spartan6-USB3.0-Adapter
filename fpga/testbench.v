@@ -46,6 +46,7 @@ module testbench;
    localparam integer BE_LEN      = 4;
    localparam integer FIFO_DEPTH  = 8192;
    localparam integer MAX_WORDS   = (TOTAL_WORDS / 4) + 4;
+   localparam [DATA_LEN-1:0] CMD_SET_LOOPBACK = 32'hA5A50004;
 
    reg                  gpio_clk;
    reg                  ft_clk;
@@ -82,8 +83,29 @@ module testbench;
    reg     prev_ft_txe_n_neg;
    reg     prev_ft_txe_n_pos;
    reg     prev_ft_rxf_n;
+   reg     prev_ft_rxf_n_pos;
    reg     rx_expect_rd_after_oe;
    reg     rx_expect_release_after_rxf;
+   reg     rx_oe_assert_wait;
+   reg     rx_rd_assert_wait;
+   reg     rx_oe_release_wait;
+   reg     rx_rd_release_wait;
+   integer rx_oe_assert_cycles_cur;
+   integer rx_rd_assert_cycles_cur;
+   integer rx_oe_release_cycles_cur;
+   integer rx_rd_release_cycles_cur;
+   integer rx_oe_assert_cycles_last;
+   integer rx_rd_assert_cycles_last;
+   integer rx_oe_release_cycles_last;
+   integer rx_rd_release_cycles_last;
+   integer rx_oe_assert_cycles_max;
+   integer rx_rd_assert_cycles_max;
+   integer rx_oe_release_cycles_max;
+   integer rx_rd_release_cycles_max;
+   integer rx_oe_assert_events_n;
+   integer rx_rd_assert_events_n;
+   integer rx_oe_release_events_n;
+   integer rx_rd_release_events_n;
    reg     tx_assert_wait;
    reg     tx_release_wait;
    integer tx_assert_cycles_cur;
@@ -94,6 +116,7 @@ module testbench;
    integer tx_release_cycles_max;
    integer tx_assert_events_n;
    integer tx_release_events_n;
+   reg     rx_payload_check_en;
 
    assign ft_data_bus = host_drive_en ? host_data_drv : {DATA_LEN{1'bz}};
    assign ft_be_bus   = host_drive_en ? host_be_drv   : {BE_LEN{1'bz}};
@@ -101,22 +124,12 @@ module testbench;
    always #10  gpio_clk = ~gpio_clk;   // 50 MHz GPIO clock
    always #7.5 ft_clk   = ~ft_clk;     // 66.67 MHz FT601 clock
 
-`ifdef TB_FORCE_FT_LOOPBACK_TEST
-   top #(
-      .GPIO_LEN(GPIO_LEN),
-      .DATA_LEN(DATA_LEN),
-      .BE_LEN(BE_LEN),
-      .FIFO_DEPTH(FIFO_DEPTH),
-      .FT_LOOPBACK_TEST(`TB_FORCE_FT_LOOPBACK_TEST)
-   ) dut (
-`else
    top #(
       .GPIO_LEN(GPIO_LEN),
       .DATA_LEN(DATA_LEN),
       .BE_LEN(BE_LEN),
       .FIFO_DEPTH(FIFO_DEPTH)
    ) dut (
-`endif
       .GPIO_CLK(gpio_clk),
       .GPIO_DATA(gpio_data),
       .GPIO_STROB(gpio_strob),
@@ -157,8 +170,29 @@ module testbench;
       prev_ft_txe_n_neg = 1'b1;
       prev_ft_txe_n_pos = 1'b1;
       prev_ft_rxf_n = 1'b1;
+      prev_ft_rxf_n_pos = 1'b1;
       rx_expect_rd_after_oe      = 1'b0;
       rx_expect_release_after_rxf = 1'b0;
+      rx_oe_assert_wait = 1'b0;
+      rx_rd_assert_wait = 1'b0;
+      rx_oe_release_wait = 1'b0;
+      rx_rd_release_wait = 1'b0;
+      rx_oe_assert_cycles_cur = 0;
+      rx_rd_assert_cycles_cur = 0;
+      rx_oe_release_cycles_cur = 0;
+      rx_rd_release_cycles_cur = 0;
+      rx_oe_assert_cycles_last = 0;
+      rx_rd_assert_cycles_last = 0;
+      rx_oe_release_cycles_last = 0;
+      rx_rd_release_cycles_last = 0;
+      rx_oe_assert_cycles_max = 0;
+      rx_rd_assert_cycles_max = 0;
+      rx_oe_release_cycles_max = 0;
+      rx_rd_release_cycles_max = 0;
+      rx_oe_assert_events_n = 0;
+      rx_rd_assert_events_n = 0;
+      rx_oe_release_events_n = 0;
+      rx_rd_release_events_n = 0;
       tx_assert_wait = 1'b0;
       tx_release_wait = 1'b0;
       tx_assert_cycles_cur = 0;
@@ -169,6 +203,7 @@ module testbench;
       tx_release_cycles_max = 0;
       tx_assert_events_n = 0;
       tx_release_events_n = 0;
+      rx_payload_check_en = 1'b0;
    end
 
    task fail(input [1023:0] msg);
@@ -343,6 +378,57 @@ module testbench;
       end
    endtask
 
+   task clear_monitors;
+      begin
+         tx_words_n = 0;
+         rx_words_n = 0;
+         rx_active_cycles_n = 0;
+         oe_active_cycles_n = 0;
+         rx_burst_seen = 1'b0;
+         tx_burst_seen = 1'b0;
+         prev_ft_oe_n = ft_oe_n;
+         prev_ft_rd_n = ft_rd_n;
+         prev_ft_wr_n = ft_wr_n;
+         prev_ft_txe_n_neg = ft_txe_n;
+         prev_ft_txe_n_pos = ft_txe_n;
+         prev_ft_rxf_n = ft_rxf_n;
+         prev_ft_rxf_n_pos = ft_rxf_n;
+         rx_expect_rd_after_oe = 1'b0;
+         rx_expect_release_after_rxf = 1'b0;
+         rx_oe_assert_wait = 1'b0;
+         rx_rd_assert_wait = 1'b0;
+         rx_oe_release_wait = 1'b0;
+         rx_rd_release_wait = 1'b0;
+         rx_oe_assert_cycles_cur = 0;
+         rx_rd_assert_cycles_cur = 0;
+         rx_oe_release_cycles_cur = 0;
+         rx_rd_release_cycles_cur = 0;
+         rx_oe_assert_cycles_last = 0;
+         rx_rd_assert_cycles_last = 0;
+         rx_oe_release_cycles_last = 0;
+         rx_rd_release_cycles_last = 0;
+         rx_oe_assert_cycles_max = 0;
+         rx_rd_assert_cycles_max = 0;
+         rx_oe_release_cycles_max = 0;
+         rx_rd_release_cycles_max = 0;
+         rx_oe_assert_events_n = 0;
+         rx_rd_assert_events_n = 0;
+         rx_oe_release_events_n = 0;
+         rx_rd_release_events_n = 0;
+         tx_assert_wait = 1'b0;
+         tx_release_wait = 1'b0;
+         tx_assert_cycles_cur = 0;
+         tx_release_cycles_cur = 0;
+         tx_assert_cycles_last = 0;
+         tx_release_cycles_last = 0;
+         tx_assert_cycles_max = 0;
+         tx_release_cycles_max = 0;
+         tx_assert_events_n = 0;
+         tx_release_events_n = 0;
+         rx_payload_check_en = 1'b0;
+      end
+   endtask
+
    task send_one_gpio_byte(
       input [GPIO_LEN-1:0] data_i,
       input                strobe_i
@@ -390,7 +476,8 @@ module testbench;
 
    task ft_set_txe_now(input val);
       begin
-         ft_txe_n <= val;
+         #1;
+         ft_txe_n = val;
       end
    endtask
 
@@ -401,10 +488,11 @@ module testbench;
       input                rxf_n_i
    );
       begin
-         host_drive_en <= drive_en_i;
-         host_be_drv   <= be_i;
-         host_data_drv <= data_i;
-         ft_rxf_n      <= rxf_n_i;
+         #1;
+         host_drive_en = drive_en_i;
+         host_be_drv   = be_i;
+         host_data_drv = data_i;
+         ft_rxf_n      = rxf_n_i;
       end
    endtask
 
@@ -564,10 +652,119 @@ module testbench;
       end
    endtask
 
+   task send_ft_command_word(
+      input [DATA_LEN-1:0] cmd_word
+   );
+      integer timeout;
+      begin
+         $display("INFO: Sending FT601 command word %h", cmd_word);
+
+         @(posedge ft_clk);
+         ft_drive_rx_now(cmd_word, {BE_LEN{1'b1}}, 1'b1, 1'b0);
+
+         timeout = 0;
+         while ((ft_rd_n !== 1'b0) || (ft_oe_n !== 1'b0)) begin
+            @(negedge ft_clk);
+            timeout = timeout + 1;
+            if (timeout > 64)
+               fail("FT601 command RX transaction did not start");
+         end
+
+         @(posedge ft_clk);
+         ft_drive_rx_now({DATA_LEN{1'b0}}, {BE_LEN{1'b0}}, 1'b0, 1'b1);
+
+         timeout = 0;
+         while ((ft_rd_n !== 1'b1) || (ft_oe_n !== 1'b1)) begin
+            @(negedge ft_clk);
+            timeout = timeout + 1;
+            if (timeout > 64)
+               fail("FT601 command RX transaction did not complete");
+         end
+      end
+   endtask
+
+   task enter_loopback_mode;
+      integer timeout;
+      begin
+         if (dut.loopback_mode_ft !== 1'b0)
+            fail("loopback_mode_ft must be 0 before loopback entry command");
+
+         send_ft_command_word(CMD_SET_LOOPBACK);
+
+         timeout = 0;
+         while ((dut.loopback_mode_ft !== 1'b1) && (timeout < 16)) begin
+            @(posedge ft_clk);
+            #1;
+            timeout = timeout + 1;
+         end
+
+         if (dut.loopback_mode_ft !== 1'b1)
+            fail("loopback_mode_ft did not assert after SET_LOOPBACK command");
+
+         wait_gpio_cycles(4);
+         if (dut.loopback_mode_gpio_ff !== 1'b1)
+            fail("loopback mode did not propagate into GPIO domain");
+
+         $display("INFO: Loopback mode entered");
+      end
+   endtask
+
+   task pulse_fpga_reset_only;
+      integer n;
+      integer gpio_release_cycles;
+      integer ft_release_cycles;
+      begin
+         $display("INFO: Pulsing FPGA_RESET to exit loopback mode");
+
+         @(negedge gpio_clk);
+         gpio_strob    = 1'b0;
+         gpio_data     = {GPIO_LEN{1'b0}};
+         ft_txe_n      = 1'b1;
+         ft_rxf_n      = 1'b1;
+         host_drive_en = 1'b0;
+         host_data_drv = {DATA_LEN{1'b0}};
+         host_be_drv   = {BE_LEN{1'b0}};
+         fpga_reset    = 1'b1;
+
+         for (n = 0; n < 4; n = n + 1)
+            @(posedge gpio_clk);
+         for (n = 0; n < 4; n = n + 1)
+            @(posedge ft_clk);
+
+         fpga_reset = 1'b0;
+
+         gpio_release_cycles = 0;
+         while ((dut.gpio_rst_n_i !== 1'b1) && (gpio_release_cycles < 4)) begin
+            @(posedge gpio_clk);
+            gpio_release_cycles = gpio_release_cycles + 1;
+         end
+         if (dut.gpio_rst_n_i !== 1'b1)
+            fail("gpio_rst_n_i did not release after FPGA_RESET pulse");
+
+         ft_release_cycles = 0;
+         while ((dut.ft_rst_n_i !== 1'b1) && (ft_release_cycles < 4)) begin
+            @(posedge ft_clk);
+            ft_release_cycles = ft_release_cycles + 1;
+         end
+         if (dut.ft_rst_n_i !== 1'b1)
+            fail("ft_rst_n_i did not release after FPGA_RESET pulse");
+
+         wait_gpio_cycles(4);
+         wait_ft_cycles(4);
+
+         if (dut.loopback_mode_ft !== 1'b0)
+            fail("loopback_mode_ft must return to 0 after FPGA_RESET");
+         if (dut.loopback_mode_gpio_ff !== 1'b0)
+            fail("loopback mode must clear in GPIO domain after FPGA_RESET");
+
+         $display("INFO: FPGA_RESET returned the design to normal mode");
+      end
+   endtask
+
    task test_gpio_mode;
       begin
-         if (dut.FT_LOOPBACK_TEST !== 1'b0)
-            fail("GPIO-mode test started while FT_LOOPBACK_TEST is not 0");
+         if (dut.loopback_mode_ft !== 1'b0)
+            fail("GPIO-mode test started while loopback mode is active");
          $display("INFO: Starting GPIO to FT601 mode test");
 
          send_gpio_stream();
@@ -576,7 +773,6 @@ module testbench;
 
          expect_no_tx_for_cycles(8);
          $display("INFO: Confirmed TX path stays idle while TXE_N is inactive");
-
          @(posedge ft_clk);
          ft_set_txe_now(1'b0);
          $display("INFO: TXE_N asserted low, waiting for FT601 transmission");
@@ -603,11 +799,12 @@ module testbench;
 
    task test_loopback_mode;
       begin
-         if (dut.FT_LOOPBACK_TEST !== 1'b1)
-            fail("Loopback-mode test started while FT_LOOPBACK_TEST is not 1");
+         if (dut.loopback_mode_ft !== 1'b1)
+            fail("Loopback-mode test started while loopback mode is not active");
          $display("INFO: Starting FT601 loopback mode test");
 
          ft_txe_n = 1'b1;
+         rx_payload_check_en = 1'b1;
          $display("INFO: TXE_N held high during FT601 receive phase");
 
          drive_ft_loopback_stream();
@@ -617,7 +814,6 @@ module testbench;
 
          expect_no_tx_for_cycles(8);
          $display("INFO: Confirmed TX path stays idle while TXE_N is inactive");
-
          @(posedge ft_clk);
          ft_set_txe_now(1'b0);
          $display("INFO: TXE_N asserted low, FT601 may accept loopback data");
@@ -634,13 +830,26 @@ module testbench;
             fail("OE_N never became active in loopback mode");
          if (rx_words_n !== exp_words_n)
             fail("RX word count does not match expected loopback payload");
-         if (dut.empty_fifo_rx !== 1'b1)
-            fail("RX FIFO is not empty after loopback transmission");
+         if (dut.empty_loopback_fifo !== 1'b1)
+            fail("Loopback FIFO is not empty after loopback transmission");
+         rx_payload_check_en = 1'b0;
          $display("INFO: TX assert latency max=%0d FT clocks, release latency max=%0d FT clocks", tx_assert_cycles_max + 1, tx_release_cycles_max + 1);
          if (tx_assert_events_n == 0)
             fail("TX assert latency was never measured in loopback mode");
          if (tx_release_events_n == 0)
             fail("TX release latency was never measured in loopback mode");
+         if (rx_oe_assert_events_n == 0)
+            fail("RX OE_N assert latency was never measured in loopback mode");
+         if (rx_rd_assert_events_n == 0)
+            fail("RX RD_N assert latency was never measured in loopback mode");
+         if (rx_oe_release_events_n == 0)
+            fail("RX OE_N release latency was never measured in loopback mode");
+         if (rx_rd_release_events_n == 0)
+            fail("RX RD_N release latency was never measured in loopback mode");
+         $display("INFO: RX assert latency max: RXF_N->OE_N=%0d FT clocks, RXF_N->RD_N=%0d FT clocks",
+                  rx_oe_assert_cycles_max + 1, rx_rd_assert_cycles_max + 1);
+         $display("INFO: RX release latency max: RXF_N->OE_N=%0d FT clocks, RXF_N->RD_N=%0d FT clocks",
+                  rx_oe_release_cycles_max + 1, rx_rd_release_cycles_max + 1);
          $display("INFO: Loopback mode test passed, looped back %0d words", tx_words_n);
       end
    endtask
@@ -694,10 +903,12 @@ module testbench;
                $display("INFO: FT601 RX burst started");
                rx_burst_seen <= 1'b1;
             end
-            if (rx_words_n < 2)
+            if (rx_payload_check_en && (rx_words_n < 2))
                $display("INFO: RX sample[%0d] data=%h be=%h", rx_words_n, dut.fsm_data_o, dut.fsm_be_o);
-            expect_rx_word(rx_words_n, dut.fsm_data_o, dut.fsm_be_o);
-            rx_words_n <= rx_words_n + 1;
+            if (rx_payload_check_en) begin
+               expect_rx_word(rx_words_n, dut.fsm_data_o, dut.fsm_be_o);
+               rx_words_n <= rx_words_n + 1;
+            end
          end
 
          if (!ft_wr_n) begin
@@ -707,8 +918,9 @@ module testbench;
                $display("INFO: FT601 TX burst started");
                tx_burst_seen <= 1'b1;
             end
-            if (tx_words_n < 2)
+            if (tx_words_n < 2) begin
                $display("INFO: TX sample[%0d] data=%h be=%h", tx_words_n, ft_data_bus, ft_be_bus);
+            end
             expect_tx_word(tx_words_n, ft_data_bus, ft_be_bus);
             tx_words_n <= tx_words_n + 1;
          end
@@ -731,6 +943,27 @@ module testbench;
 
    always @(posedge ft_clk or negedge ft_reset_n) begin
       if (!ft_reset_n) begin
+         prev_ft_rxf_n_pos  <= 1'b1;
+         rx_oe_assert_wait  <= 1'b0;
+         rx_rd_assert_wait  <= 1'b0;
+         rx_oe_release_wait <= 1'b0;
+         rx_rd_release_wait <= 1'b0;
+         rx_oe_assert_cycles_cur <= 0;
+         rx_rd_assert_cycles_cur <= 0;
+         rx_oe_release_cycles_cur <= 0;
+         rx_rd_release_cycles_cur <= 0;
+         rx_oe_assert_cycles_last <= 0;
+         rx_rd_assert_cycles_last <= 0;
+         rx_oe_release_cycles_last <= 0;
+         rx_rd_release_cycles_last <= 0;
+         rx_oe_assert_cycles_max <= 0;
+         rx_rd_assert_cycles_max <= 0;
+         rx_oe_release_cycles_max <= 0;
+         rx_rd_release_cycles_max <= 0;
+         rx_oe_assert_events_n <= 0;
+         rx_rd_assert_events_n <= 0;
+         rx_oe_release_events_n <= 0;
+         rx_rd_release_events_n <= 0;
          prev_ft_txe_n_pos  <= 1'b1;
          tx_assert_wait     <= 1'b0;
          tx_release_wait    <= 1'b0;
@@ -744,6 +977,58 @@ module testbench;
          tx_release_events_n   <= 0;
       end
       else begin
+         if (rx_oe_assert_wait) begin
+            if (!ft_oe_n) begin
+               rx_oe_assert_wait <= 1'b0;
+               rx_oe_assert_cycles_last <= rx_oe_assert_cycles_cur;
+               rx_oe_assert_events_n <= rx_oe_assert_events_n + 1;
+               if (rx_oe_assert_cycles_cur > rx_oe_assert_cycles_max)
+                  rx_oe_assert_cycles_max <= rx_oe_assert_cycles_cur;
+               $display("INFO: RXF_N active to OE_N active latency = %0d FT clocks", rx_oe_assert_cycles_cur + 1);
+            end
+            else
+               rx_oe_assert_cycles_cur <= rx_oe_assert_cycles_cur + 1;
+         end
+
+         if (rx_rd_assert_wait) begin
+            if (!ft_rd_n) begin
+               rx_rd_assert_wait <= 1'b0;
+               rx_rd_assert_cycles_last <= rx_rd_assert_cycles_cur;
+               rx_rd_assert_events_n <= rx_rd_assert_events_n + 1;
+               if (rx_rd_assert_cycles_cur > rx_rd_assert_cycles_max)
+                  rx_rd_assert_cycles_max <= rx_rd_assert_cycles_cur;
+               $display("INFO: RXF_N active to RD_N active latency = %0d FT clocks", rx_rd_assert_cycles_cur + 1);
+            end
+            else
+               rx_rd_assert_cycles_cur <= rx_rd_assert_cycles_cur + 1;
+         end
+
+         if (rx_oe_release_wait) begin
+            if (ft_oe_n) begin
+               rx_oe_release_wait <= 1'b0;
+               rx_oe_release_cycles_last <= rx_oe_release_cycles_cur;
+               rx_oe_release_events_n <= rx_oe_release_events_n + 1;
+               if (rx_oe_release_cycles_cur > rx_oe_release_cycles_max)
+                  rx_oe_release_cycles_max <= rx_oe_release_cycles_cur;
+               $display("INFO: RXF_N inactive to OE_N inactive latency = %0d FT clocks", rx_oe_release_cycles_cur + 1);
+            end
+            else
+               rx_oe_release_cycles_cur <= rx_oe_release_cycles_cur + 1;
+         end
+
+         if (rx_rd_release_wait) begin
+            if (ft_rd_n) begin
+               rx_rd_release_wait <= 1'b0;
+               rx_rd_release_cycles_last <= rx_rd_release_cycles_cur;
+               rx_rd_release_events_n <= rx_rd_release_events_n + 1;
+               if (rx_rd_release_cycles_cur > rx_rd_release_cycles_max)
+                  rx_rd_release_cycles_max <= rx_rd_release_cycles_cur;
+               $display("INFO: RXF_N inactive to RD_N inactive latency = %0d FT clocks", rx_rd_release_cycles_cur + 1);
+            end
+            else
+               rx_rd_release_cycles_cur <= rx_rd_release_cycles_cur + 1;
+         end
+
          if (tx_assert_wait) begin
             if (!ft_wr_n) begin
                tx_assert_wait       <= 1'b0;
@@ -794,23 +1079,80 @@ module testbench;
             end
          end
 
+         if (prev_ft_rxf_n_pos && !ft_rxf_n) begin
+            if (ft_oe_n) begin
+               rx_oe_assert_wait <= 1'b1;
+               rx_oe_assert_cycles_cur <= 0;
+            end
+            else begin
+               rx_oe_assert_cycles_last <= 0;
+               rx_oe_assert_events_n <= rx_oe_assert_events_n + 1;
+               $display("INFO: RXF_N active to OE_N active latency = 1 FT clock");
+            end
+
+            if (ft_rd_n) begin
+               rx_rd_assert_wait <= 1'b1;
+               rx_rd_assert_cycles_cur <= 0;
+            end
+            else begin
+               rx_rd_assert_cycles_last <= 0;
+               rx_rd_assert_events_n <= rx_rd_assert_events_n + 1;
+               $display("INFO: RXF_N active to RD_N active latency = 1 FT clock");
+            end
+         end
+
+         if (!prev_ft_rxf_n_pos && ft_rxf_n) begin
+            if (!ft_oe_n) begin
+               rx_oe_release_wait <= 1'b1;
+               rx_oe_release_cycles_cur <= 0;
+            end
+            else begin
+               rx_oe_release_cycles_last <= 0;
+               rx_oe_release_events_n <= rx_oe_release_events_n + 1;
+               $display("INFO: RXF_N inactive to OE_N inactive latency = 1 FT clock");
+            end
+
+            if (!ft_rd_n) begin
+               rx_rd_release_wait <= 1'b1;
+               rx_rd_release_cycles_cur <= 0;
+            end
+            else begin
+               rx_rd_release_cycles_last <= 0;
+               rx_rd_release_events_n <= rx_rd_release_events_n + 1;
+               $display("INFO: RXF_N inactive to RD_N inactive latency = 1 FT clock");
+            end
+         end
+
+         prev_ft_rxf_n_pos <= ft_rxf_n;
          prev_ft_txe_n_pos <= ft_txe_n;
       end
    end
 
    initial begin
-      $display("INFO: Testbench start. top.FT_LOOPBACK_TEST=%0d", dut.FT_LOOPBACK_TEST);
+      $display("INFO: Testbench start. Universal bitstream mode");
       load_vectors();
       build_expected_words();
 
       tb_reset();
 
-      if (dut.FT_LOOPBACK_TEST == 1'b0)
-         test_gpio_mode();
-      else
-         test_loopback_mode();
+      if (dut.loopback_mode_ft !== 1'b0)
+         fail("Design must start in normal mode after reset");
 
-      $display("TEST PASSED. FT_LOOPBACK_TEST=%0d words=%0d", dut.FT_LOOPBACK_TEST, exp_words_n);
+      clear_monitors();
+      test_gpio_mode();
+
+      @(posedge ft_clk);
+      ft_set_txe_now(1'b1);
+      wait_ft_cycles(4);
+
+      clear_monitors();
+      enter_loopback_mode();
+      clear_monitors();
+      test_loopback_mode();
+
+      pulse_fpga_reset_only();
+
+      $display("TEST PASSED. Universal bitstream flow verified, words=%0d", exp_words_n);
       $finish;
    end
 
