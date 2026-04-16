@@ -77,7 +77,19 @@
 - datasheet FT601;
 - application note FTDI по master FIFO;
 - reference design FTDI для Spartan-6;
+- vendor Windows utilities `WU_*` для настройки и ручной проверки FT601;
 - дополнительные материалы по FIFO, timing и ISE.
+
+### `ft601_test/`
+
+Консольная C++ программа для ручной работы с FT601 через D3XX API на стороне ПК.
+
+Что лежит в папке:
+
+- `main.cpp` — исходник консольной утилиты;
+- `README.md` — краткий runbook по сборке и запуску;
+- `WU_FTD3XXLib/` — библиотека D3XX для сборки и запуска;
+- `WU_FTD3XX_Driver/` — драйвер D3XX для FT601 под Windows.
 
 ## Как пользоваться проектом
 
@@ -92,6 +104,15 @@
 5. Для входа в loopback отправить в FT601 слово `32'hA5A50004` с `BE = 4'hF`.
 6. После этого передавать payload в FT601 RX path и читать его обратно через FT601 TX path.
 7. Для выхода из loopback подать `FPGA_RESET`.
+
+### Проверка со стороны ПК через `ft601_test`
+
+Если нужен прямой тест обмена без отдельного GUI-приложения FTDI:
+
+1. Собрать или запустить `ft601_test/main_gpp.exe`.
+2. Выбрать `Write counter 1..10000`, чтобы отправить тестовый поток в `EP02` (`0x02`).
+3. Выбрать `Read to file`, чтобы прочитать данные из `EP82` (`0x82`) в `rx_dump.bin`.
+4. Для loopback сначала включить runtime loopback в FPGA, затем писать в `EP02` и читать ответ из `EP82`.
 
 ### Что важно учитывать
 
@@ -108,3 +129,4 @@
 2. `docs/SPECIFICATION.md` — точные требования к архитектуре, handshake и verification.
 3. `fpga/top.v` — верхний уровень и реальный datapath.
 4. `fpga/testbench.v` — проверка текущего поведения дизайна.
+5. `ft601_test/README.md` — host-side проверка FT601 через D3XX.
