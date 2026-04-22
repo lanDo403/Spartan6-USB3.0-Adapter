@@ -89,9 +89,7 @@ module fifo_fsm
 	                          ((state == RX_BURST) && !full_fifo && !rxf_n));
 	
 	
-	//-------------------------------------------------------------
-	// state and next_state logic
-	//-------------------------------------------------------------	
+	// state and next_state logic	
 	always @(posedge clk) begin
 		if (!rst_n)
 			state <= ARB;
@@ -114,9 +112,7 @@ module fifo_fsm
 		endcase
 	end
 	
-	//-------------------------------------------------------------
 	// Flags 
-	//-------------------------------------------------------------
 	always @(posedge clk) begin
 		if (!rst_n) begin
 			rxf_n_p1 <= 1'b1;
@@ -129,9 +125,7 @@ module fifo_fsm
 		end
 	end
 	
-	//-------------------------------------------------------------
 	// Prefetch
-	//-------------------------------------------------------------
 	always @(posedge clk) begin
 		if (!rst_n) begin
 			tx_stage_ff            <= {DATA_LEN{1'b0}};
@@ -195,9 +189,7 @@ module fifo_fsm
 		end
 	end
 	
-	//-------------------------------------------------------------
 	// TX output register
-	//-------------------------------------------------------------
 	always @(posedge clk) begin
 		if (!rst_n) begin
 			tx_data_ff <= {DATA_LEN{1'b0}};
@@ -223,9 +215,7 @@ module fifo_fsm
 		end
 	end
 	
-	//-------------------------------------------------------------
-	// RX data register
-	//-------------------------------------------------------------
+	// RX output register
 	always @(posedge clk) begin
 		if (!rst_n) begin
 			rx_data_ff <= {DATA_LEN{1'b0}};
@@ -244,9 +234,8 @@ module fifo_fsm
 			be_i_ff    <= be_i;
 		end
 	end
-	//-------------------------------------------------------------
+	
 	// Control-output block
-	//-------------------------------------------------------------
 	always @(posedge clk) begin
 		if (!rst_n) begin
 			drive_tx_ff   <= 1'b0;

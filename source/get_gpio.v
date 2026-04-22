@@ -20,9 +20,7 @@ module get_gpio #(
 	reg [GPIO_LEN-1:0] data_rx;
 	reg strob_rx;
 	
-	//---------------------------------------------------------------------
-	// input buffers
-	//---------------------------------------------------------------------
+
 	IBUFG #(
 		.IOSTANDARD("LVCMOS33") // Specify the output I/O standard
 	) IBUFG_clk (

@@ -42,41 +42,62 @@ module fifo_singleclock #(
 	assign full_next = (wr_ptr_next[ADDR_LEN] != rd_ptr_next[ADDR_LEN]) &&
 	                   (wr_ptr_next[ADDR_LEN-1:0] == rd_ptr_next[ADDR_LEN-1:0]);
 
+	// FIFO state: pointers and occupancy flags.
 	always @(posedge clk) begin
 		if (!rst_n) begin
 			wr_ptr_ff <= {ADDR_LEN+1{1'b0}};
 			rd_ptr_ff <= {ADDR_LEN+1{1'b0}};
-			data_ff <= {DATA_LEN{1'b0}};
 			full_ff <= 1'b0;
 			empty_ff <= 1'b1;
-			overflow_ff <= 1'b0;
-			underflow_ff <= 1'b0;
 		end
 		else if (soft_clear_i) begin
 			wr_ptr_ff <= {ADDR_LEN+1{1'b0}};
 			rd_ptr_ff <= {ADDR_LEN+1{1'b0}};
-			data_ff <= {DATA_LEN{1'b0}};
 			full_ff <= 1'b0;
 			empty_ff <= 1'b1;
-			overflow_ff <= 1'b0;
-			underflow_ff <= 1'b0;
 		end
 		else begin
-			if (wen_do)
-				mem[wr_ptr_ff[ADDR_LEN-1:0]] <= data_i;
-			else if (wen_i && full_ff)
-				overflow_ff <= 1'b1;
-
-			if (ren_do)
-				data_ff <= mem[rd_ptr_ff[ADDR_LEN-1:0]];
-			else if (ren_i && empty_ff)
-				underflow_ff <= 1'b1;
-
 			wr_ptr_ff <= wr_ptr_next;
 			rd_ptr_ff <= rd_ptr_next;
 			full_ff <= full_next;
 			empty_ff <= empty_next;
 		end
+	end
+
+	// Datapath: synchronous write into memory and synchronous read into the output register.
+	always @(posedge clk) begin
+		if (!rst_n) begin
+			data_ff <= {DATA_LEN{1'b0}};
+		end
+		else if (soft_clear_i) begin
+			data_ff <= {DATA_LEN{1'b0}};
+		end
+		else begin
+			if (wen_do)
+				mem[wr_ptr_ff[ADDR_LEN-1:0]] <= data_i;
+			if (ren_do)
+				data_ff <= mem[rd_ptr_ff[ADDR_LEN-1:0]];
+		end
+	end
+
+	// Overflow is sticky until reset or soft clear.
+	always @(posedge clk) begin
+		if (!rst_n)
+			overflow_ff <= 1'b0;
+		else if (soft_clear_i)
+			overflow_ff <= 1'b0;
+		else if (wen_i && full_ff)
+			overflow_ff <= 1'b1;
+	end
+
+	// Underflow is sticky until reset or soft clear.
+	always @(posedge clk) begin
+		if (!rst_n)
+			underflow_ff <= 1'b0;
+		else if (soft_clear_i)
+			underflow_ff <= 1'b0;
+		else if (ren_i && empty_ff)
+			underflow_ff <= 1'b1;
 	end
 
 	assign data_o = data_ff;

@@ -83,11 +83,11 @@
 
 ### 3.2. Основные блоки
 
-#### `fpga/top.v`
+#### `source/top.v`
 
 Связывает оба домена, FIFO, FT601 wrapper, FSM и управляющие блоки.
 
-#### `fpga/ft601_io.v`
+#### `source/ft601_io.v`
 
 Физическая обвязка FT601:
 
@@ -102,7 +102,7 @@
 - наружу в остальной дизайн выходят только зарегистрированные `txe_n_o` и `rxf_n_o`;
 - эти регистры являются целевой точкой завершения timing-анализа по `OFFSET IN` для control-флагов FT601.
 
-#### `fpga/bit_sync.v`
+#### `source/bit_sync.v`
 
 Локальный single-bit CDC helper.
 
@@ -111,15 +111,15 @@
 - синхронизация `loopback_mode` из FT-домена в `gpio_clk`;
 - сохранение `top.v` как чистого интеграционного модуля без собственной последовательностной CDC-логики.
 
-#### `fpga/get_gpio.v`
+#### `source/get_gpio.v`
 
 Захват GPIO-сигналов и формирование локальных write-domain сигналов.
 
-#### `fpga/packer8to32.v`
+#### `source/packer8to32.v`
 
 Упаковка четырех валидных байтов в одно 32-битное слово.
 
-#### `fpga/fifo_dualport.v` + `fpga/sram_dualport.v`
+#### `source/fifo_dualport.v` + `source/sram_dualport.v`
 
 Асинхронный TX FIFO между GPIO domain и FT domain.
 
@@ -129,7 +129,7 @@
 - раздельные такты записи и чтения;
 - фиксация `overflow` и `underflow`.
 
-#### `fpga/fifo_singleclock.v`
+#### `source/fifo_singleclock.v`
 
 Single-clock FIFO в домене `ft_clk_i` для loopback.
 
@@ -140,7 +140,7 @@ Single-clock FIFO в домене `ft_clk_i` для loopback.
 
 Loopback FIFO не хранит только `DATA[31:0]`, так как `BE` должен сохраняться вместе с payload.
 
-#### `fpga/loopback_ft_ctrl.v`
+#### `source/loopback_ft_ctrl.v`
 
 FT-domain блок локального runtime-управления loopback-путем.
 
@@ -151,29 +151,29 @@ FT-domain блок локального runtime-управления loopback-п
 - формирование записи в `loopback_fifo`;
 - генерация `tx_prefetch_en` и `tx_source_change` для `fifo_fsm`.
 
-#### `fpga/host_cmd_ctrl.v`
+#### `source/host_cmd_ctrl.v`
 
 Потоковый декодер слов, пришедших с FT601.
 
 Текущее назначение:
 
-- обработка служебных RX-слов в `normal mode`;
+- обработка служебных RX-frame в обоих режимах;
 - фиксация и очистка sticky-ошибок;
 - включение runtime loopback режима.
 
 RX-команды больше не обязаны проходить через отдельный async RX FIFO: они обрабатываются потоково по принятым словам в FT-домене.
 
-#### `fpga/status_ft_ctrl.v`
+#### `source/status_ft_ctrl.v`
 
 FT-domain источник статусного ответного слова.
 
 Текущее назначение:
 
-- формирование одного TX control beat по `CMD_GET_STATUS`;
-- выдача `status_word` через FT601 TX path;
+- формирование двухсловного TX status frame по `CMD_GET_STATUS`;
+- выдача `STATUS_MAGIC` и `status_word` через FT601 TX path;
 - запуск ответа только в безопасном окне, когда внутренний TX pipeline свободен.
 
-#### `fpga/tx_write_guard.v`
+#### `source/tx_write_guard.v`
 
 Управление записью в TX FIFO со стороны GPIO domain.
 
@@ -183,7 +183,7 @@ FT-domain источник статусного ответного слова.
 - блокировка приема новых GPIO-слов после sticky-ошибки;
 - очистка TX error по команде от хоста.
 
-#### `fpga/fifo_fsm.v`
+#### `source/fifo_fsm.v`
 
 FSM FT601-интерфейса.
 
@@ -248,7 +248,7 @@ Loopback включается во время работы без перепро
 Способ входа:
 
 - команда `32'hA5A50004`, принятая через FT601 RX path;
-- команда передается как `control beat` с `BE = 4'hE`.
+- команда передается как framed service protocol: сначала `CMD_MAGIC = 32'hA55A5AA5`, затем `opcode = 32'hA5A50004`, оба слова с полным `BE = 4'hF`.
 
 Поведение:
 
@@ -256,11 +256,11 @@ Loopback включается во время работы без перепро
 2. FPGA принимает их через FT601 RX handshake.
 3. Слова записываются в `loopback_fifo` как `{BE, DATA}`.
 4. Далее те же слова выдаются обратно через FT601 TX path.
-5. Обычные RX-слова рассматриваются как payload, а `control beat` продолжает трактоваться как служебное слово и не попадает в payload.
+5. Обычные RX-слова рассматриваются как payload, а `control frame` продолжает трактоваться как служебная последовательность слов и не попадает в payload.
 
 ### 4.3. Выход из loopback mode
 
-Штатный выход выполняется командой `32'hA5A50005`, принятой через FT601 RX path как `control beat`.
+Штатный выход выполняется командой `32'hA5A50005`, принятой через FT601 RX path как `control frame`.
 
 После этого система обязана:
 
@@ -274,34 +274,39 @@ Loopback включается во время работы без перепро
 
 ## 5. Командный протокол
 
-Командный поток идет через `control beat` и должен распознаваться в обоих режимах.
+Командный поток идет через framed service protocol и должен распознаваться в обоих режимах.
 
-Слово считается командой, если:
+Команда считается принятой, если:
 
-1. `BE = 4'hE`;
-2. `DATA[31:0]` совпадает с одним из поддерживаемых кодов.
+1. пришло полное слово `CMD_MAGIC = 32'hA55A5AA5` с `BE = 4'hF`;
+2. следующее полное слово с `BE = 4'hF` трактуется как `opcode`;
+3. `opcode` совпадает с одним из поддерживаемых кодов.
 
 ### 5.1. Поддерживаемые команды
 
+- `32'hA55A5AA5` — `CMD_MAGIC`, первый beat любого service-command frame;
 - `32'h00000001` — очистить TX error;
 - `32'h00000002` — очистить RX error;
 - `32'h00000003` — очистить обе ошибки;
 - `32'hA5A50004` — включить loopback mode.
 - `32'hA5A50005` — вернуть `normal mode`.
 - `32'hA5A50006` — запросить статусный ответ.
+- `32'h5AA55AA5` — `STATUS_MAGIC`, первый beat любого status response frame.
 
 ### 5.2. Ограничения по loopback-команде
 
 1. Команда включения loopback должна быть принята через обычный FT601 RX handshake.
-2. Командное слово не должно попасть в loopback payload.
-3. После входа в loopback обычные RX-слова трактуются как payload, а `control beat` остается служебным словом.
+2. Оба слова command frame не должны попасть в loopback payload.
+3. После входа в loopback обычные RX-слова трактуются как payload, а `control frame` остается служебной последовательностью слов.
 
 ### 5.3. Статусный ответ
 
-На `CMD_GET_STATUS` FPGA должна вернуть один TX control beat:
+На `CMD_GET_STATUS` FPGA должна вернуть двухсловный TX status frame:
 
-- `BE = 4'hE`
-- `DATA = status_word`
+1. `STATUS_MAGIC = 32'h5AA55AA5`
+2. `status_word`
+
+Оба слова должны передаваться как полные 32-битные beat с `BE = 4'hF`.
 
 Формат `status_word`:
 
@@ -394,11 +399,11 @@ Loopback включается во время работы без перепро
 
 ### 8.3. Очистка ошибок
 
-Ошибки очищаются командами от хоста через FT601 RX path в виде `control beat`.
+Ошибки очищаются командами от хоста через FT601 RX path в виде `control frame`.
 
 ## 9. Verification requirements
 
-Основной проверочный стенд: `fpga/testbench.v`.
+Основной проверочный стенд: `source/testbench.v`.
 
 Testbench должен покрывать:
 
@@ -414,33 +419,35 @@ Testbench должен покрывать:
 10. `CMD_GET_STATUS` в `normal mode`;
 11. `CMD_GET_STATUS` в `loopback mode`;
 12. `CMD_GET_STATUS` после recovery-команд;
-13. корректность RX и TX данных;
-14. фазировку FT601 RX/TX handshake;
-15. количественное измерение RX и TX latency.
+13. `opcode` без `CMD_MAGIC` не считается командой;
+14. `CMD_MAGIC + unknown opcode` не меняет состояние и не попадает в payload;
+15. корректность RX и TX данных;
+16. фазировку FT601 RX/TX handshake;
+17. количественное измерение RX и TX latency.
 
-Stimulus для GPIO и loopback берется из `fpga/data_p`.
+Stimulus для GPIO и loopback берется из `source/data_p`.
 
 ## 10. Файлы реализации
 
 Основные HDL-файлы:
 
-- `fpga/top.v`
-- `fpga/ft601_io.v`
-- `fpga/rst_sync.v`
-- `fpga/get_gpio.v`
-- `fpga/packer8to32.v`
-- `fpga/fifo_dualport.v`
-- `fpga/fifo_singleclock.v`
-- `fpga/sram_dualport.v`
-- `fpga/fifo_fsm.v`
-- `fpga/tx_write_guard.v`
-- `fpga/host_cmd_ctrl.v`
-- `fpga/status_ft_ctrl.v`
-- `fpga/testbench.v`
+- `source/top.v`
+- `source/ft601_io.v`
+- `source/rst_sync.v`
+- `source/get_gpio.v`
+- `source/packer8to32.v`
+- `source/fifo_dualport.v`
+- `source/fifo_singleclock.v`
+- `source/sram_dualport.v`
+- `source/fifo_fsm.v`
+- `source/tx_write_guard.v`
+- `source/host_cmd_ctrl.v`
+- `source/status_ft_ctrl.v`
+- `source/testbench.v`
 
 Файл ограничений:
 
-- `fpga/callistoS6.ucf`
+- `source/callistoS6.ucf`
 
 Материалы reference и datasheet:
 

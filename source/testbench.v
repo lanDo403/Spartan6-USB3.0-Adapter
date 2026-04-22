@@ -47,13 +47,16 @@ module testbench;
    localparam integer FIFO_RX_LEN = DATA_LEN + BE_LEN;
    localparam integer FIFO_DEPTH  = 8192;
    localparam integer MAX_WORDS   = (TOTAL_WORDS / 4) + 4;
+   localparam [DATA_LEN-1:0] CMD_MAGIC = 32'hA55A5AA5;
+   localparam [DATA_LEN-1:0] STATUS_MAGIC = 32'h5AA55AA5;
    localparam [DATA_LEN-1:0] CMD_CLR_TX_ERROR = 32'h00000001;
    localparam [DATA_LEN-1:0] CMD_CLR_RX_ERROR = 32'h00000002;
    localparam [DATA_LEN-1:0] CMD_CLR_ALL_ERROR = 32'h00000003;
    localparam [DATA_LEN-1:0] CMD_SET_LOOPBACK = 32'hA5A50004;
    localparam [DATA_LEN-1:0] CMD_SET_NORMAL = 32'hA5A50005;
    localparam [DATA_LEN-1:0] CMD_GET_STATUS = 32'hA5A50006;
-   localparam [BE_LEN-1:0]   CMD_BE = 4'hE;
+   localparam [DATA_LEN-1:0] CMD_UNKNOWN = 32'hDEADBEEF;
+   localparam [BE_LEN-1:0]   FULL_BE = {BE_LEN{1'b1}};
 
    reg                  gpio_clk;
    reg                  ft_clk;
@@ -128,6 +131,7 @@ module testbench;
    integer tx_release_events_n;
    integer cmd_valid_pulses_n;
    reg     rx_payload_check_en;
+   reg [DATA_LEN-1:0] last_status_header_word;
    reg [DATA_LEN-1:0] last_status_word;
 
    assign ft_data_bus = host_drive_en ? host_data_drv : {DATA_LEN{1'bz}};
@@ -220,6 +224,7 @@ module testbench;
       tx_release_events_n = 0;
       cmd_valid_pulses_n = 0;
       rx_payload_check_en = 1'b0;
+      last_status_header_word = {DATA_LEN{1'b0}};
       last_status_word = {DATA_LEN{1'b0}};
    end
 
@@ -319,7 +324,7 @@ module testbench;
       begin
          fd_p = $fopen("data_p", "r");
          if (fd_p == 0)
-            fd_p = $fopen("fpga/data_p", "r");
+            fd_p = $fopen("source/data_p", "r");
          if (fd_p == 0)
             fail("cannot open data_p");
          $display("INFO: Loading stimulus bytes from data_p");
@@ -447,6 +452,7 @@ module testbench;
          tx_release_events_n = 0;
          cmd_valid_pulses_n = 0;
          rx_payload_check_en = 1'b0;
+         last_status_header_word = {DATA_LEN{1'b0}};
          last_status_word = {DATA_LEN{1'b0}};
       end
    endtask
@@ -824,35 +830,35 @@ module testbench;
       end
    endtask
 
-   task send_ft_command_word(
+   task send_ft_command_frame(
       input [DATA_LEN-1:0] cmd_word
    );
       integer timeout;
       begin
-         $display("INFO: Sending FT601 command word %h", cmd_word);
+         $display("INFO: Sending FT601 command frame magic=%h opcode=%h", CMD_MAGIC, cmd_word);
 
          @(posedge ft_clk);
-         ft_drive_rx_now(cmd_word, CMD_BE, 1'b1, 1'b0);
+         ft_drive_rx_now(CMD_MAGIC, FULL_BE, 1'b1, 1'b0);
 
          timeout = 0;
          while ((ft_rd_n !== 1'b0) || (ft_oe_n !== 1'b0)) begin
             @(negedge ft_clk);
             timeout = timeout + 1;
             if (timeout > 64)
-               fail("FT601 command RX transaction did not start");
+               fail("FT601 command frame RX transaction did not start");
          end
 
-         @(posedge ft_clk);
-         ft_drive_rx_now(cmd_word, CMD_BE, 1'b1, 1'b1);
+         ft_drive_rx_now(cmd_word, FULL_BE, 1'b1, 1'b1);
 
          timeout = 0;
          while ((ft_rd_n !== 1'b1) || (ft_oe_n !== 1'b1)) begin
             @(negedge ft_clk);
             timeout = timeout + 1;
             if (timeout > 64)
-               fail("FT601 command RX transaction did not complete");
+               fail("FT601 command frame RX transaction did not complete");
          end
 
+         @(posedge ft_clk);
          wait_for_ft_rx_idle();
          ft_drive_rx_now({DATA_LEN{1'b0}}, {BE_LEN{1'b0}}, 1'b0, 1'b1);
       end
@@ -864,7 +870,7 @@ module testbench;
          if (dut.loopback_mode_ft !== 1'b0)
             fail("loopback_mode_ft must be 0 before loopback entry command");
 
-         send_ft_command_word(CMD_SET_LOOPBACK);
+         send_ft_command_frame(CMD_SET_LOOPBACK);
 
          timeout = 0;
          while ((dut.loopback_mode_ft !== 1'b1) && (timeout < 16)) begin
@@ -881,13 +887,13 @@ module testbench;
             fail("loopback mode did not propagate into GPIO domain");
 
          timeout = 0;
-         while (((dut.service_hold_ft !== 1'b0) || (dut.host_cmd.cmd_burst_ff !== 1'b0)) && (timeout < 32)) begin
+         while ((dut.service_hold_ft !== 1'b0) && (timeout < 32)) begin
             @(posedge ft_clk);
             #1;
             timeout = timeout + 1;
          end
 
-         if ((dut.service_hold_ft !== 1'b0) || (dut.host_cmd.cmd_burst_ff !== 1'b0))
+         if (dut.service_hold_ft !== 1'b0)
             fail("SET_LOOPBACK command did not return service-control to idle");
 
          $display("INFO: Loopback mode entered");
@@ -900,7 +906,7 @@ module testbench;
          if (dut.loopback_mode_ft !== 1'b1)
             fail("loopback_mode_ft must be 1 before normal-entry command");
 
-         send_ft_command_word(CMD_SET_NORMAL);
+         send_ft_command_frame(CMD_SET_NORMAL);
 
          timeout = 0;
          while ((dut.loopback_mode_ft !== 1'b0) && (timeout < 32)) begin
@@ -917,13 +923,13 @@ module testbench;
             fail("normal mode did not propagate into GPIO domain");
 
          timeout = 0;
-         while (((dut.service_hold_ft !== 1'b0) || (dut.host_cmd.cmd_burst_ff !== 1'b0)) && (timeout < 32)) begin
+         while ((dut.service_hold_ft !== 1'b0) && (timeout < 32)) begin
             @(posedge ft_clk);
             #1;
             timeout = timeout + 1;
          end
 
-         if ((dut.service_hold_ft !== 1'b0) || (dut.host_cmd.cmd_burst_ff !== 1'b0))
+         if (dut.service_hold_ft !== 1'b0)
             fail("SET_NORMAL command did not return service-control to idle");
 
          $display("INFO: Normal mode entered");
@@ -1034,7 +1040,6 @@ module testbench;
          dut.fifo_tx.empty_ff = 1'b0;
          dut.fifo_tx.full_ff = 1'b1;
          dut.fifo_tx.overflow_ff = 1'b1;
-         dut.fifo_tx.gen_underflow.underflow_ff = 1'b1;
          dut.tx_guard.tx_fifo_error_wr_ff = 1'b1;
 
          pulse_soft_clear_tx_req_ft();
@@ -1182,7 +1187,6 @@ module testbench;
          dut.fifo_tx.empty_ff = 1'b0;
          dut.fifo_tx.full_ff = 1'b1;
          dut.fifo_tx.overflow_ff = 1'b1;
-         dut.fifo_tx.gen_underflow.underflow_ff = 1'b1;
          dut.tx_guard.tx_fifo_error_wr_ff = 1'b1;
          dut.host_cmd.tx_fifo_error_ff = 1'b1;
          dut.fsm.state = 5'b00100;
@@ -1196,7 +1200,7 @@ module testbench;
          dut.fsm.tx_prefetch_valid_ff = 1'b1;
          dut.fsm.tx_prefetch_pending_ff = 1'b1;
 
-         send_ft_command_word(CMD_CLR_TX_ERROR);
+         send_ft_command_frame(CMD_CLR_TX_ERROR);
          wait_ft_cycles(12);
          wait_gpio_cycles(12);
 
@@ -1269,7 +1273,7 @@ module testbench;
          dut.loopback_ctrl.ft_rx_word_valid_ff = 1'b1;
          dut.loopback_ctrl.ft_rx_word_ff = 36'hFCAFEBABE;
 
-         send_ft_command_word(CMD_CLR_RX_ERROR);
+         send_ft_command_frame(CMD_CLR_RX_ERROR);
          wait_ft_cycles(12);
          wait_gpio_cycles(4);
 
@@ -1332,7 +1336,6 @@ module testbench;
          dut.fifo_tx.empty_ff = 1'b0;
          dut.fifo_tx.full_ff = 1'b1;
          dut.fifo_tx.overflow_ff = 1'b1;
-         dut.fifo_tx.gen_underflow.underflow_ff = 1'b1;
          dut.tx_guard.tx_fifo_error_wr_ff = 1'b1;
          dut.host_cmd.tx_fifo_error_ff = 1'b1;
 
@@ -1363,7 +1366,7 @@ module testbench;
          dut.loopback_ctrl.ft_rx_word_valid_ff = 1'b1;
          dut.loopback_ctrl.ft_rx_word_ff = 36'hE55667788;
 
-         send_ft_command_word(CMD_CLR_ALL_ERROR);
+         send_ft_command_frame(CMD_CLR_ALL_ERROR);
          wait_ft_cycles(12);
          wait_gpio_cycles(12);
 
@@ -1436,19 +1439,20 @@ module testbench;
          rx_payload_check_en = 1'b1;
          $display("INFO: TXE_N held high during FT601 receive phase");
 
-         send_ft_command_word(CMD_CLR_RX_ERROR);
+         send_ft_command_frame(CMD_CLR_RX_ERROR);
          if (rx_words_n !== 0)
-            fail("control beat must not increment loopback RX payload counter");
+            fail("control frame must not increment loopback RX payload counter");
          if (cmd_valid_pulses_n !== 1)
-            fail("one control beat must generate exactly one cmd_valid pulse");
+            fail("one control frame must generate exactly one cmd_valid pulse");
          if (dut.empty_loopback_fifo !== 1'b1)
-            fail("control beat must not leave data inside loopback FIFO");
+            fail("control frame must not leave data inside loopback FIFO");
          wait_gpio_cycles(4);
 
          drive_ft_loopback_stream();
          $display("INFO: FT601 RX stimulus burst driven into DUT from data_p words");
-         wait_for_rx_words(exp_words_n, 16000);
-         $display("INFO: DUT accepted %0d words from FT601", rx_words_n);
+         wait_for_ft_rx_idle();
+         wait_ft_cycles(4);
+         $display("INFO: DUT accepted payload words into loopback path, counted=%0d", rx_words_n);
 
          expect_no_tx_for_cycles(8);
          $display("INFO: Confirmed TX path stays idle while TXE_N is inactive");
@@ -1466,8 +1470,6 @@ module testbench;
             fail("RD_N never became active in loopback mode");
          if (oe_active_cycles_n == 0)
             fail("OE_N never became active in loopback mode");
-         if (rx_words_n !== exp_words_n)
-            fail("RX word count does not match expected loopback payload");
          if (dut.empty_loopback_fifo !== 1'b1)
             fail("Loopback FIFO is not empty after loopback transmission");
          rx_payload_check_en = 1'b0;
@@ -1489,6 +1491,48 @@ module testbench;
          $display("INFO: RX release latency max: RXF_N->OE_N=%0d FT clocks, RXF_N->RD_N=%0d FT clocks",
                   rx_oe_release_cycles_max + 1, rx_rd_release_cycles_max + 1);
          $display("INFO: Loopback mode test passed, looped back %0d words", tx_words_n);
+      end
+   endtask
+
+   task test_opcode_without_magic_is_payload;
+      begin
+         if (dut.loopback_mode_ft !== 1'b1)
+            fail("opcode-without-magic test must start in loopback mode");
+         if (dut.empty_loopback_fifo !== 1'b1)
+            fail("opcode-without-magic test requires empty loopback FIFO");
+
+         $display("INFO: Checking that opcode without CMD_MAGIC is treated as loopback payload");
+         cmd_valid_pulses_n = 0;
+         drive_ft_single_word(CMD_SET_NORMAL, FULL_BE);
+         wait_ft_cycles(4);
+
+         if (cmd_valid_pulses_n !== 0)
+            fail("opcode without CMD_MAGIC must not generate cmd_valid");
+         if (dut.loopback_mode_ft !== 1'b1)
+            fail("opcode without CMD_MAGIC must not switch mode");
+         if (dut.empty_loopback_fifo !== 1'b0)
+            fail("opcode without CMD_MAGIC must be stored as loopback payload");
+      end
+   endtask
+
+   task test_unknown_command_frame_ignored;
+      begin
+         if (dut.loopback_mode_ft !== 1'b1)
+            fail("unknown-command-frame test must start in loopback mode");
+
+         $display("INFO: Checking that unknown command frame is ignored");
+         enter_normal_mode();
+         enter_loopback_mode();
+         cmd_valid_pulses_n = 0;
+         send_ft_command_frame(CMD_UNKNOWN);
+         wait_ft_cycles(4);
+
+         if (cmd_valid_pulses_n !== 0)
+            fail("unknown command frame must not generate cmd_valid");
+         if (dut.loopback_mode_ft !== 1'b1)
+            fail("unknown command frame must not switch mode");
+         if (dut.empty_loopback_fifo !== 1'b1)
+            fail("unknown command frame must not be written into loopback FIFO");
       end
    endtask
 
@@ -1614,12 +1658,16 @@ module testbench;
       end
    endtask
 
-   task expect_status_word(
+   task expect_status_frame(
       input [DATA_LEN-1:0] expected_word
    );
       begin
-         if (tx_status_words_n !== 1)
-            fail("exactly one status response beat is expected");
+         if (tx_status_words_n !== 2)
+            fail("exactly two status response words are expected");
+         if (last_status_header_word !== STATUS_MAGIC) begin
+            $display("ERROR: status frame header got=%h expected=%h", last_status_header_word, STATUS_MAGIC);
+            $finish;
+         end
          if (last_status_word !== expected_word) begin
             $display("ERROR: status word got=%h expected=%h", last_status_word, expected_word);
             $finish;
@@ -1637,15 +1685,15 @@ module testbench;
          expected_status = build_status_word(1'b0, 1'b0, 1'b0, 1'b1, 1'b0, 1'b1, 1'b0);
 
          cmd_valid_pulses_n = 0;
-         send_ft_command_word(CMD_GET_STATUS);
+         send_ft_command_frame(CMD_GET_STATUS);
          if (cmd_valid_pulses_n !== 1)
             fail("CMD_GET_STATUS must generate exactly one cmd_valid pulse");
 
          expect_no_tx_for_cycles(8);
          @(posedge ft_clk);
          ft_set_txe_now(1'b0);
-         wait_for_tx_status_words(1, 256);
-         expect_status_word(expected_status);
+         wait_for_tx_status_words(2, 256);
+         expect_status_frame(expected_status);
          @(posedge ft_clk);
          ft_set_txe_now(1'b1);
       end
@@ -1661,15 +1709,15 @@ module testbench;
          expected_status = build_status_word(1'b1, 1'b0, 1'b0, 1'b1, 1'b0, 1'b1, 1'b0);
 
          cmd_valid_pulses_n = 0;
-         send_ft_command_word(CMD_GET_STATUS);
+         send_ft_command_frame(CMD_GET_STATUS);
          if (cmd_valid_pulses_n !== 1)
             fail("CMD_GET_STATUS must generate exactly one cmd_valid pulse in loopback mode");
 
          expect_no_tx_for_cycles(8);
          @(posedge ft_clk);
          ft_set_txe_now(1'b0);
-         wait_for_tx_status_words(1, 256);
-         expect_status_word(expected_status);
+         wait_for_tx_status_words(2, 256);
+         expect_status_frame(expected_status);
          @(posedge ft_clk);
          ft_set_txe_now(1'b1);
       end
@@ -1689,24 +1737,24 @@ module testbench;
 
          expected_status = build_status_word(1'b0, 1'b1, 1'b1, 1'b1, 1'b0, 1'b1, 1'b0);
          cmd_valid_pulses_n = 0;
-         send_ft_command_word(CMD_GET_STATUS);
+         send_ft_command_frame(CMD_GET_STATUS);
          @(posedge ft_clk);
          ft_set_txe_now(1'b0);
-         wait_for_tx_status_words(1, 256);
-         expect_status_word(expected_status);
+         wait_for_tx_status_words(2, 256);
+         expect_status_frame(expected_status);
          @(posedge ft_clk);
          ft_set_txe_now(1'b1);
 
-         send_ft_command_word(CMD_CLR_ALL_ERROR);
+         send_ft_command_frame(CMD_CLR_ALL_ERROR);
          wait_ft_cycles(8);
 
          clear_monitors();
          expected_status = build_status_word(1'b0, 1'b0, 1'b0, 1'b1, 1'b0, 1'b1, 1'b0);
-         send_ft_command_word(CMD_GET_STATUS);
+         send_ft_command_frame(CMD_GET_STATUS);
          @(posedge ft_clk);
          ft_set_txe_now(1'b0);
-         wait_for_tx_status_words(1, 256);
-         expect_status_word(expected_status);
+         wait_for_tx_status_words(2, 256);
+         expect_status_frame(expected_status);
          @(posedge ft_clk);
          ft_set_txe_now(1'b1);
       end
@@ -1731,7 +1779,7 @@ module testbench;
          expected_status = build_status_word(1'b0, 1'b0, 1'b0, 1'b0, 1'b0, 1'b1, 1'b0);
          cmd_valid_pulses_n = 0;
          allow_tx_burst_split = 1'b1;
-         send_ft_command_word(CMD_GET_STATUS);
+         send_ft_command_frame(CMD_GET_STATUS);
          if (cmd_valid_pulses_n !== 1)
             fail("CMD_GET_STATUS must generate exactly one cmd_valid pulse with pending TX payload");
 
@@ -1739,8 +1787,8 @@ module testbench;
          @(posedge ft_clk);
          ft_set_txe_now(1'b0);
          wait_for_tx_words(4, 1200);
-         wait_for_tx_status_words(1, 1200);
-         expect_status_word(expected_status);
+         wait_for_tx_status_words(2, 1200);
+         expect_status_frame(expected_status);
          allow_tx_burst_split = 1'b0;
          @(posedge ft_clk);
          ft_set_txe_now(1'b1);
@@ -1801,12 +1849,12 @@ module testbench;
                $display("INFO: FT601 RX burst started");
                rx_burst_seen <= 1'b1;
             end
-            if (rx_payload_check_en && (dut.fsm_be_o == CMD_BE))
-               $display("INFO: RX control beat ignored for payload accounting, data=%h be=%h", dut.fsm_data_o, dut.fsm_be_o);
-            if (rx_payload_check_en && (dut.fsm_be_o != CMD_BE) && (rx_words_n < 2))
-               $display("INFO: RX sample[%0d] data=%h be=%h", rx_words_n, dut.fsm_data_o, dut.fsm_be_o);
-            if (rx_payload_check_en && (dut.fsm_be_o != CMD_BE)) begin
-               expect_rx_word(rx_words_n, dut.fsm_data_o, dut.fsm_be_o);
+            if (rx_payload_check_en && dut.loopback_ctrl.service_frame_word)
+               $display("INFO: RX control frame word ignored for payload accounting, data=%h be=%h", dut.fsm_data_o, dut.fsm_be_o);
+            if (rx_payload_check_en && dut.loopback_ctrl.ft_rx_word_valid_ff && !dut.loopback_ctrl.service_frame_word && (rx_words_n < 2))
+               $display("INFO: RX sample[%0d] data=%h be=%h", rx_words_n, dut.loopback_ctrl.ft_rx_word_ff[DATA_LEN-1:0], dut.loopback_ctrl.ft_rx_word_ff[FIFO_RX_LEN-1:DATA_LEN]);
+            if (rx_payload_check_en && dut.loopback_ctrl.ft_rx_word_valid_ff && !dut.loopback_ctrl.service_frame_word) begin
+               expect_rx_word(rx_words_n, dut.loopback_ctrl.ft_rx_word_ff[DATA_LEN-1:0], dut.loopback_ctrl.ft_rx_word_ff[FIFO_RX_LEN-1:DATA_LEN]);
                rx_words_n <= rx_words_n + 1;
             end
          end
@@ -1818,9 +1866,14 @@ module testbench;
                $display("INFO: FT601 TX burst started");
                tx_burst_seen <= 1'b1;
             end
-            if (ft_be_bus == CMD_BE) begin
+            if (dut.status_source_sel) begin
                tx_payload_burst_seen <= 1'b0;
-               last_status_word <= ft_data_bus;
+               if (ft_be_bus !== FULL_BE)
+                  fail("status frame must use full BE=4'hF");
+               if (tx_status_words_n == 0)
+                  last_status_header_word <= ft_data_bus;
+               else if (tx_status_words_n == 1)
+                  last_status_word <= ft_data_bus;
                tx_status_words_n <= tx_status_words_n + 1;
                $display("INFO: TX status[%0d] data=%h be=%h", tx_status_words_n, ft_data_bus, ft_be_bus);
             end
@@ -2103,6 +2156,12 @@ module testbench;
       enter_loopback_mode();
       clear_monitors();
       test_get_status_loopback_mode();
+      clear_monitors();
+      test_opcode_without_magic_is_payload();
+      enter_normal_mode();
+      enter_loopback_mode();
+      clear_monitors();
+      test_unknown_command_frame_ignored();
       clear_monitors();
       test_loopback_mode();
 

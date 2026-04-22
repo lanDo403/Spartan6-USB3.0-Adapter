@@ -36,7 +36,7 @@
 
 ### FT loopback mode
 
-Включается командой `32'hA5A50004` через FT601 RX path.
+Включается service-frame `CMD_MAGIC + CMD_SET_LOOPBACK` через FT601 RX path.
 
 Путь данных:
 
@@ -45,12 +45,13 @@
 Особенности:
 
 - loopback работает в одном bitstream с normal mode;
-- payload хранится как `{BE, DATA}` в `fpga/fifo_singleclock.v`;
-- выход из loopback выполняется через `FPGA_RESET`.
+- payload хранится как `{BE, DATA}` в `source/fifo_singleclock.v`;
+- штатный выход из loopback выполняется через `CMD_MAGIC + CMD_SET_NORMAL`;
+- `FPGA_RESET` остается полным reset и тоже возвращает дизайн в `normal mode`.
 
 ## Структура репозитория
 
-### `fpga/`
+### `source/`
 
 Основные HDL-файлы проекта.
 
@@ -93,6 +94,14 @@
 - `WU_FTD3XXLib/` — библиотека D3XX для сборки и запуска;
 - `WU_FTD3XX_Driver/` — драйвер D3XX для FT601 под Windows.
 
+Что умеет утилита:
+
+- писать raw payload в `EP02`;
+- читать raw payload из `EP82` в `rx_dump.bin`;
+- отправлять framed service-команды `CMD_MAGIC + opcode`;
+- читать framed status response `STATUS_MAGIC + status_word`;
+- переключать режимы и читать статус прошивки без перепрошивки FPGA.
+
 ## Как пользоваться проектом
 
 ### Работа на FPGA
@@ -103,23 +112,29 @@
 2. Настроить FT601 в `245 synchronous FIFO mode`.
 3. После reset дизайн находится в `normal mode`.
 4. В `normal mode` подавать полезные данные на GPIO и читать их на стороне ПК через FT601.
-5. Для входа в loopback отправить в FT601 слово `32'hA5A50004` с `BE = 4'hF`.
-6. После этого передавать payload в FT601 RX path и читать его обратно через FT601 TX path.
-7. Для выхода из loopback подать `FPGA_RESET`.
+5. Для чтения текущего состояния можно отправить service-frame `CMD_MAGIC + CMD_GET_STATUS` и получить ответ `STATUS_MAGIC + status_word`.
+6. Для входа в loopback отправить service-frame `CMD_MAGIC + CMD_SET_LOOPBACK`.
+7. После этого передавать payload в FT601 RX path и читать его обратно через FT601 TX path.
+8. Для штатного возврата в `normal mode` отправить `CMD_MAGIC + CMD_SET_NORMAL`.
+9. `FPGA_RESET` использовать как полный reset, а не как штатную команду смены режима.
 
 ### Проверка со стороны ПК через `ft601_test`
 
 Если нужен прямой тест обмена без отдельного GUI-приложения FTDI:
 
-1. Собрать или запустить `ft601_test/main_gpp.exe`.
-2. Выбрать `Write counter 1..10000`, чтобы отправить тестовый поток в `EP02` (`0x02`).
-3. Выбрать `Read to file`, чтобы прочитать данные из `EP82` (`0x82`) в `rx_dump.bin`.
-4. Для loopback сначала включить runtime loopback в FPGA, затем писать в `EP02` и читать ответ из `EP82`.
+1. Собрать `ft601_test/main_gpp.exe` по инструкции из `ft601_test/README.md`.
+2. Выбрать `Get FPGA status`, чтобы проверить текущий режим и агрегированные флаги ошибок.
+3. Для входа в loopback выбрать `Set loopback mode`.
+4. Для выхода из loopback выбрать `Set normal mode`.
+5. Для recovery использовать `Clear TX error`, `Clear RX error` или `Clear all errors`.
+6. Для raw datapath-проверки использовать `Write test payload` и `Read payload to file`.
 
 ### Что важно учитывать
 
 - один bitstream обслуживает оба режима;
 - FT601 RX path в `normal mode` предназначен для служебных команд;
+- service-команды и status response идут как framed protocol `CMD_MAGIC + opcode` / `STATUS_MAGIC + status_word`;
+- host-side utility работает в stop-and-wait режиме и не должна смешивать service traffic с raw payload;
 - loopback payload не должен смешиваться с командным потоком;
 - `TXE_N` и `RXF_N` внутри дизайна используются только в зарегистрированном виде после `ft601_io`.
 
@@ -129,7 +144,7 @@
 
 1. `README.md` — общая карта репозитория и сценарии использования.
 2. `docs/SPECIFICATION.md` — точные требования к архитектуре, handshake и verification.
-3. `fpga/top.v` — верхний уровень и реальный datapath.
-4. `fpga/testbench.v` — проверка текущего поведения дизайна.
+3. `source/top.v` — верхний уровень и реальный datapath.
+4. `source/testbench.v` — проверка текущего поведения дизайна.
 5. `ft601_test/README.md` — host-side проверка FT601 через D3XX.
 

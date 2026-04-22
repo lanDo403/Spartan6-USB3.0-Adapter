@@ -4,9 +4,7 @@ module ft601_io #(
 	parameter DATA_LEN = 32,
 	parameter BE_LEN   = 4
 )(
-	//-------------------------------------------------------------
 	// FT601 physical pins
-	//-------------------------------------------------------------
 	input                     CLK,
 	input                     RESET_N, // Active-low reset input from FT601
 	input                     TXE_N,
@@ -17,9 +15,7 @@ module ft601_io #(
 	inout  [BE_LEN-1:0]       BE,
 	inout  [DATA_LEN-1:0]     DATA,
 
-	//-------------------------------------------------------------
 	// Internal core-side signals
-	//-------------------------------------------------------------
 	output                    clk_o,
 	output                    reset_n_o, // Buffered active-low FT601 reset
 	output                    txe_n_o,
@@ -40,9 +36,7 @@ module ft601_io #(
 	(* IOB = "TRUE" *) reg txe_n_ff;
 	(* IOB = "TRUE" *) reg rxf_n_ff;
 
-	//-------------------------------------------------------------
 	// Buffered inputs from FT601
-	//-------------------------------------------------------------
 	IBUFG #(
 		.IOSTANDARD("LVCMOS33")
 	) ibufg_clk (
@@ -85,9 +79,7 @@ module ft601_io #(
 	assign txe_n_o = txe_n_ff;
 	assign rxf_n_o = rxf_n_ff;
 
-	//-------------------------------------------------------------
 	// Buffered FT601 control outputs
-	//-------------------------------------------------------------
 	OBUF #(
 		.IOSTANDARD("LVCMOS33"),
 		.DRIVE(8),
@@ -115,9 +107,7 @@ module ft601_io #(
 		.O(RD_N)
 	);
 
-	//-------------------------------------------------------------
-	// jirectional FT601 buses
-	//-------------------------------------------------------------
+	// Bidirectional FT601 buses
 	genvar i;
 	generate
 		for (i = 0; i < DATA_LEN; i = i + 1) begin : gen_data_iobuf

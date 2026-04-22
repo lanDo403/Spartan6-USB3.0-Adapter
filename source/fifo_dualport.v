@@ -45,9 +45,8 @@ module fifo_dualport#(
 	reg [ADDR_LEN:0] rd_ptr_gray_sync1, rd_ptr_gray_sync2;
 	
 	reg wen_do, ren_do;
-	//-------------------------------------------------------------
+	
 	// Write domain pointers (gray pointers and address)
-	//-------------------------------------------------------------
 	always @(posedge clk_wr) begin
 		if (!rst_wr_n) begin
 			wr_ptr_bin <= 0;
@@ -78,9 +77,7 @@ module fifo_dualport#(
 		wr_ptr_gray_next = (wr_ptr_bin_next >> 1) ^ wr_ptr_bin_next;
 	end
 	
-	//-------------------------------------------------------------
 	// Read domain pointers (gray pointers and address)
-	//-------------------------------------------------------------
 	always @(posedge clk_rd) begin
 		if (!rst_rd_n) begin
 			rd_ptr_bin <= 0;
@@ -107,9 +104,7 @@ module fifo_dualport#(
 		rd_ptr_gray_next = (rd_ptr_bin_next >> 1) ^ rd_ptr_bin_next;
 	end
 	
-	//-------------------------------------------------------------
 	// Syncronization gray pointers
-	//-------------------------------------------------------------
 	always @(posedge clk_wr) begin
 		if (!rst_wr_n) begin
 			rd_ptr_gray_sync1 <= 0;
@@ -140,9 +135,7 @@ module fifo_dualport#(
 		end
 	end
 	
-	//-------------------------------------------------------------
 	// Output signals
-	//-------------------------------------------------------------
 	assign empty_next_r = (rd_ptr_gray_next == wr_ptr_gray_sync2);
 	assign full_next_w  = (wr_ptr_gray_next == {~rd_ptr_gray_sync2[ADDR_LEN:ADDR_LEN-1], rd_ptr_gray_sync2[ADDR_LEN-2:0]});
 	
@@ -160,7 +153,7 @@ module fifo_dualport#(
 	
 	generate
 		if (USE_UNDERFLOW) begin : gen_underflow
-			reg underflow_ff;
+			(* KEEP = "TRUE" *) reg underflow_ff;
 			
 			always @(posedge clk_rd) begin
 				if (!rst_rd_n)

@@ -1,18 +1,4 @@
 `timescale 1ns / 1ps
-`include "get_gpio.v"
-`include "packer8to32.v"
-`include "fifo_dualport.v"
-`include "fifo_singleclock.v"
-`include "sram_dualport.v"
-`include "fifo_fsm.v"
-`include "host_cmd_ctrl.v"
-`include "tx_write_guard.v"
-`include "ft601_io.v"
-`include "rst_sync.v"
-`include "bit_sync.v"
-`include "pulse_sync.v"
-`include "loopback_ft_ctrl.v"
-`include "status_ft_ctrl.v"
 
 // This project is divided by two frequency domains. Write domain works on GPIO_CLK from input gpio pin (frequency is changeable). 
 // Write domain includes modules such as get_gpio, packer8to32, fifo_dualport(write side) and sram_dp(write side).
@@ -41,10 +27,7 @@ module top #(
 	inout [BE_LEN-1:0] 		BE,			// In and out byte enable bus connected to FT601
 	inout [DATA_LEN-1:0] 	DATA		// In and out data bus connected to FT601
 	 );
-	localparam [BE_LEN-1:0] CTRL_BE = 4'hE;
-	//-------------------------------------------------------------
-	// Wires
-	//-------------------------------------------------------------
+	localparam [BE_LEN-1:0] FULL_BE = {BE_LEN{1'b1}};
 	
 	//-----gpio-----
 	wire [GPIO_LEN-1:0] gpio_data; 	// from GPIO module to packer8to32 module
@@ -68,6 +51,8 @@ module top #(
 	wire packer_wen_i;
 	wire packer_wen_raw;
 	wire tx_fifo_error_i; // Sticky TX-side error collected in CLK domain and synchronized into lvds_clk.
+	wire tx_fifo_error_wr_gpio; // GPIO-domain sticky TX error from tx_write_guard.
+	wire tx_fifo_error_wr_ft; // FT-domain synchronized copy of GPIO TX error.
 	wire [DATA_LEN-1:0] fsm_tx_fifo_data_i; // Selected TX source for FT601: normal TX FIFO or loopback FIFO.
 	wire [BE_LEN-1:0]   fsm_tx_fifo_be_i; // Selected TX byte-enable source.
 	wire                fsm_tx_fifo_empty_i; // Empty flag for the currently selected TX source.
@@ -135,16 +120,14 @@ module top #(
 	wire fifo_append; // when is active - data from ft601 drives to fifo
 	
 	
-	//-------------------------------------------------------------
 	// Assignings
-	//-------------------------------------------------------------
 	assign fifo_data_i = packer_data_o;
 	// TX source is selected at runtime:
 	// normal mode uses the GPIO/TX FIFO, loopback mode reuses words captured into the FT-domain loopback FIFO.
 	assign fsm_tx_fifo_data_i  = status_source_sel ? status_word :
 	                            loopback_mode_ft ? loopback_fifo_data_o[DATA_LEN-1:0] :
 	                            fifo_data_o;
-	assign fsm_tx_fifo_be_i    = status_source_sel ? CTRL_BE :
+	assign fsm_tx_fifo_be_i    = status_source_sel ? FULL_BE :
 	                            loopback_mode_ft ? loopback_fifo_data_o[FIFO_RX_LEN-1:DATA_LEN] :
 	                            {BE_LEN{1'b1}};
 	assign fsm_tx_fifo_empty_i = status_source_sel ? status_source_empty :
@@ -160,9 +143,6 @@ module top #(
 	assign ft_rst_req = fpga_reset_i | ft_reset_i;
 	assign soft_clear_tx_ft = soft_clear_tx_req_ft;
 
-	//-------------------------------------------------------------
-	// Buffered FPGA reset input
-	//-------------------------------------------------------------
 	IBUF #(
 		.IOSTANDARD("LVCMOS33")
 	) ibuf_fpga_reset (
@@ -170,9 +150,7 @@ module top #(
 		.O(fpga_reset_i)
 	);
 	
-	//-------------------------------------------------------------
 	// FT601 physical I/O wrapper
-	//-------------------------------------------------------------
 	ft601_io #(
 		.DATA_LEN(DATA_LEN),
 		.BE_LEN(BE_LEN)
@@ -200,9 +178,7 @@ module top #(
 		.tx_data_i(tx_data)
 	);
 
-	//-------------------------------------------------------------
-	// Reset synchronizers per clock domain
-	//-------------------------------------------------------------
+	// Synchronizers per clock domain
 	rst_sync gpio_rst_sync (
 		.clk(gpio_clk),
 		.arst_i(fpga_reset_i),
@@ -242,6 +218,15 @@ module top #(
 		.dout(tx_fifo_full_ft)
 	);
 
+	bit_sync #(
+		.RESET_VALUE(1'b0)
+	) tx_fifo_error_wr_ft_sync (
+		.clk(ft_clk_i),
+		.rst_n(ft_rst_n_i),
+		.din(tx_fifo_error_wr_gpio),
+		.dout(tx_fifo_error_wr_ft)
+	);
+
 	pulse_sync soft_clear_tx_gpio_sync (
 		.src_clk(ft_clk_i),
 		.src_rst_n(ft_rst_n_i),
@@ -251,6 +236,7 @@ module top #(
 		.pulse_o(soft_clear_tx_gpio)
 	);
 
+	// Loopback control
 	loopback_ft_ctrl #(
 		.FIFO_RX_LEN(FIFO_RX_LEN),
 		.BE_LEN(BE_LEN)
@@ -271,6 +257,7 @@ module top #(
 		.tx_source_change_o(tx_source_change)
 	);
 
+	// Status control
 	status_ft_ctrl #(
 		.DATA_LEN(DATA_LEN)
 	) status_ctrl (
@@ -295,9 +282,7 @@ module top #(
 		.source_change_o(status_source_change)
 	);
 
-	//-------------------------------------------------------------
-	// Connection to get_gpio module
-	//------------------------------------------------------------- 
+	// GPIO I/O wrapper
 	get_gpio gpio(
 		.clk_i(GPIO_CLK),
 		.strob_i(GPIO_STROB),
@@ -307,9 +292,7 @@ module top #(
 		.clk_o(gpio_clk)
 	);
 	
-	//-------------------------------------------------------------
-	// Connection to packer8to32 
-	//-------------------------------------------------------------
+	// Packer 8-bit bus to 32-bit bus
 	packer8to32 packer(
 		.clk(gpio_clk),
 		.rst_n(gpio_rst_n_i),
@@ -319,12 +302,11 @@ module top #(
 		.data_o(packer_data_o)
 	);
 	
-	//-------------------------------------------------------------
-	// Connection to FIFO
-	//-------------------------------------------------------------
+	// GPIO-domain asynchronous FIFO
 	fifo_dualport #(
 		.DATA_LEN(DATA_LEN),
-		.DEPTH(FIFO_DEPTH)
+		.DEPTH(FIFO_DEPTH),
+		.USE_UNDERFLOW(0)
 	) fifo_tx(
 		.clk_wr(gpio_clk),
 		.clk_rd(ft_clk_i),
@@ -348,9 +330,7 @@ module top #(
 		.underflow(tx_fifo_underflow)
 	);
 	
-	//-------------------------------------------------------------
-	// Connection to SRAM
-	//-------------------------------------------------------------
+	// Asynchronous FIFO SRAM
 	sram_dp #(
 		.DATA_LEN(DATA_LEN),
 		.DEPTH(FIFO_DEPTH)
@@ -365,9 +345,7 @@ module top #(
 		.data_o(sram_out)
 	);
 
-	//-------------------------------------------------------------
 	// FT-domain loopback FIFO
-	//-------------------------------------------------------------
 	fifo_singleclock #(
 		.DATA_LEN(FIFO_RX_LEN),
 		.DEPTH(FIFO_DEPTH)
@@ -385,9 +363,7 @@ module top #(
 		.underflow(rx_fifo_underflow)
 	);
 
-	//-------------------------------------------------------------
-	// Connection to RX control
-	//-------------------------------------------------------------
+	// Host command control
 	host_cmd_ctrl #(
 		.DATA_LEN(DATA_LEN),
 		.BE_LEN(BE_LEN),
@@ -399,6 +375,7 @@ module top #(
 		.rx_word_i(ft_rx_word),
 		.ft_idle_i(fsm_idle_o),
 		.tx_fifo_underflow_i(tx_fifo_underflow),
+		.tx_fifo_error_i(tx_fifo_error_wr_ft),
 		.rx_fifo_overflow_i(rx_fifo_overflow),
 		.rx_fifo_underflow_i(rx_fifo_underflow),
 		.tx_fifo_error_o(tx_fifo_error_i),
@@ -411,9 +388,7 @@ module top #(
 		.loopback_mode_o(loopback_mode_ft)
 	);
 
-	//-------------------------------------------------------------
-	// Connection to TX control
-	//-------------------------------------------------------------
+	// TX write guard
 	tx_write_guard tx_guard(
 		.clk(gpio_clk),
 		.rst_n(gpio_rst_n_i),
@@ -423,12 +398,11 @@ module top #(
 		.tx_fifo_overflow_i(tx_fifo_overflow),
 		.tx_fifo_error_i(tx_fifo_error_i),
 		.rx_fifo_error_i(rx_fifo_error_i),
-		.packer_wen_o(packer_wen_raw)
+		.packer_wen_o(packer_wen_raw),
+		.tx_fifo_error_wr_o(tx_fifo_error_wr_gpio)
 	);
 
-	//-------------------------------------------------------------
-	// Connection to FSM 
-	//-------------------------------------------------------------
+	// FT-domain FSM 
 	fifo_fsm fsm(
 		.rst_n(ft_rst_n_i),
 		.clk(ft_clk_i),
