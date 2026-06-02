@@ -86,24 +86,56 @@ status_word
 
 ## Структура репозитория
 
-`source/` содержит RTL, testbench и constraints. Главная точка входа - `source/top.v`. Физическая граница FT601 находится в `ft601_wrapper.v`, а read/write handshake разбит между `ft601_fsm.v`, `ft601_rx_adapter.v` и `ft601_tx_adapter.v`. Выбор TX-источника делает `axis_tx_arbiter.v`, RX service/payload path разделяет `rx_stream_router.v`, команды разбирает `cmd_decoder.v`. FIFO-порты приводятся к stream-контракту через `axis_fifo_write_adapter.v` и `axis_fifo_read_adapter.v`.
+```text
+logic_analyzer/
+├── source/                         # RTL, testbench и constraints
+│   ├── top.v                       # Верхнеуровневая интеграция
+│   ├── ft601_wrapper.v             # Физическая граница FT601
+│   ├── ft601_fsm.v                 # Координация FT601 bus
+│   ├── ft601_rx_adapter.v          # FT601 RX -> stream
+│   ├── ft601_tx_adapter.v          # Stream -> FT601 TX
+│   ├── axis_tx_arbiter.v           # Арбитраж TX-источников
+│   ├── rx_stream_router.v          # Разделение service/payload RX path
+│   ├── cmd_decoder.v               # Декодер служебных команд
+│   ├── status_source.v             # Источник status frame
+│   ├── axis_fifo_write_adapter.v   # Stream-to-FIFO write adapter
+│   ├── axis_fifo_read_adapter.v    # FIFO-to-stream read adapter
+│   ├── async_fifo.v                # Async FIFO normal path
+│   ├── loopback_fifo.v             # FIFO loopback path
+│   ├── testbench.v                 # Сценарный RTL testbench
+│   └── callistoS6.ucf              # Ограничения Spartan-6
+├── ft601_test/                     # Консольная D3XX-утилита для ПК
+│   ├── main.cpp                    # Меню и dispatch операций
+│   ├── ft601_device.*              # Работа с устройством и pipe
+│   ├── service_protocol.*          # Service protocol и status
+│   ├── payload_test.*              # Raw payload write/read
+│   ├── throughput.*                # Расчет прикладной скорости
+│   ├── app_log.*                   # Timestamped логирование
+│   ├── FTD3XX.h                    # Локальный заголовок D3XX
+│   ├── WU_FTD3XXLib/               # DLL и import/static libraries D3XX
+│   ├── WU_FTD3XX_Driver/           # Пакет драйвера FTDI D3XX
+│   └── README.md                   # Сборка и использование утилиты
+├── images/                         # Схемы и иллюстрации для README
+├── README.md                       # Обзор проекта
+└── SPECIFICATION.md                # Актуальная техническая спецификация
+```
 
-`SPECIFICATION.md` содержит актуальное техническое описание протокола, reset-системы, FT601 handshake, datapath и проверок.
+## Утилизация ресурсов
 
-`ft601_test/` - консольная C++ утилита для ручной проверки с ПК через D3XX API. Код разделен по смыслу: `main.cpp` содержит меню, `ft601_device.*` работает с D3XX и pipe, `service_protocol.*` отправляет команды и читает статус, `payload_test.*` генерирует raw payload и читает payload dump, `throughput.*` печатает прикладную скорость payload-операций.
+Целевая ПЛИС: `xc6slx150-3-fgg676`.
+
+| Ресурс | Использовано | Доступно | Утилизация |
+| --- | ---: | ---: | ---: |
+| Slice Registers | `756` | `184304` | `1%` |
+| Slice LUTs | `713` | `92152` | `1%` |
+| Occupied Slices | `266` | `23038` | `1%` |
+| Bonded IOBs | `54` | `498` | `10%` |
+| RAMB16BWER | `36` | `268` | `13%` |
+| BUFG/BUFGMUX | `2` | `16` | `12%` |
 
 ## Проверка RTL
 
-Базовая проверка выполняется из `source/`:
-
-```powershell
-cd .\source
-iverilog -g2005-sv -o testbench.out testbench.v
-vvp .\testbench.out
-verilator_bin.exe --lint-only --timing testbench.v
-```
-
-Для timing-sensitive изменений дополнительно нужен ISE flow и просмотр `top.syr`, `top.twr`, `top.twx`. Проектный timing-контракт не задает фиксированную latency из FTDI master FIFO reference. Требование другое: не должно быть прямого combinational path от `TXE_N/RXF_N` pad к `WR_N/RD_N/OE_N`; handshake должен быть корректным, а `DATA/BE` должны стабильно вести себя во время write, read и reset.
+В проекте есть testbench `source/testbench.v`. Он проверяет основные сценарии работы RTL, включая reset, normal path, loopback path, diagnostics и граничные случаи обмена с FT601.
 
 Структурная схема тестбенча:
 
