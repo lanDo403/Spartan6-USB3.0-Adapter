@@ -10,17 +10,15 @@ module ft601_tx_adapter #(
 	input                    arb_phase_i,
 	input                    prefetch_phase_i,
 	input                    burst_phase_i,
-	input                    write_fire_i,
-	input                    flush_i,
-	input                    clear_i,
-	input                    hold_i,
+	input                    bus_wr_hs_i,
+	input                    block_i,
 	input                    prefetch_en_i,
-	input                    status_source_i,
-	input                    s_valid_i,
-	input  [DATA_LEN-1:0]    s_data_i,
-	input  [BE_LEN-1:0]      s_keep_i,
-	output                   s_ready_o,
-	output                   word_valid_o,
+	input                    status_sel_i,
+	input                    s_axis_tvalid_i,
+	input  [DATA_LEN-1:0]    s_axis_tdata_i,
+	input  [BE_LEN-1:0]      s_axis_tkeep_i,
+	output                   s_axis_tready_o,
+	output                   bus_valid_o,
 	output                   idle_o,
 	output [DATA_LEN-1:0]    bus_data_o,
 	output [BE_LEN-1:0]      bus_keep_o,
@@ -28,131 +26,129 @@ module ft601_tx_adapter #(
 	output                   bus_drive_o
 );
 
-	reg [DATA_LEN-1:0] data_ff;
-	reg [DATA_LEN-1:0] lookahead_data_ff;
-	reg [BE_LEN-1:0]   keep_ff;
-	reg [BE_LEN-1:0]   lookahead_keep_ff;
-	reg word_valid_ff;
-	reg lookahead_valid_ff;
+	reg [DATA_LEN-1:0] out_data_ff;
+	reg [DATA_LEN-1:0] buf_data_ff;
+	reg [BE_LEN-1:0]   out_keep_ff;
+	reg [BE_LEN-1:0]   buf_keep_ff;
+	reg out_valid_ff;
+	reg buf_valid_ff;
 	reg prefetch_en_ff;
-	reg source_ready_ff;
+	reg src_accept_en_ff;
 	reg bus_drive_ff;
+	reg status_sel_d_ff;
 
-	reg [DATA_LEN-1:0] data_next;
-	reg [DATA_LEN-1:0] lookahead_data_next;
-	reg [BE_LEN-1:0]   keep_next;
-	reg [BE_LEN-1:0]   lookahead_keep_next;
-	reg word_valid_next;
-	reg lookahead_valid_next;
+	reg [DATA_LEN-1:0] out_data_next;
+	reg [DATA_LEN-1:0] buf_data_next;
+	reg [BE_LEN-1:0]   out_keep_next;
+	reg [BE_LEN-1:0]   buf_keep_next;
+	reg out_valid_next;
+	reg buf_valid_next;
 
-	wire write_fire_w;
-	wire write_req_w;
-	wire source_ready_w;
-	wire buffer_ready_w;
-	wire s_fire_w;
-	wire [1:0] buffer_used_w;
+	wire bus_wr_hs;
+	wire bus_wr_req;
+	wire src_accept_en;
+	wire buf_ready;
+	wire s_axis_hs;
+	wire [1:0] buf_used;
+	wire status_start;
 
-	assign write_fire_w = write_fire_i && word_valid_ff;
-	assign write_req_w = !txe_n_i && word_valid_ff;
-	assign source_ready_w = status_source_i || !txe_n_i;
-	assign buffer_used_w = {1'b0, word_valid_ff} +
-	                       {1'b0, lookahead_valid_ff};
-	assign buffer_ready_w = (buffer_used_w < 2'd2) || write_fire_w;
-	assign s_fire_w = s_valid_i && s_ready_o;
+	assign status_start = status_sel_i && !status_sel_d_ff;
+	assign bus_wr_hs = bus_wr_hs_i && out_valid_ff && !status_start;
+	assign bus_wr_req = !txe_n_i && out_valid_ff && !status_start;
+	assign src_accept_en = status_sel_i || !txe_n_i;
+	assign buf_used = {1'b0, out_valid_ff} +
+	                       {1'b0, buf_valid_ff};
+	assign buf_ready = status_start || (buf_used < 2'd2);
+	assign s_axis_hs = s_axis_tvalid_i && s_axis_tready_o;
 
-	// One output word plus one lookahead word are enough for continuous FT601 TX bursts.
-	// flush_i drops only this local prefetch state; hold_i only blocks new source pops.
+	// One output word plus one buffered word are enough for continuous FT601 TX bursts.
+	// block_i only blocks new source pops during mode switching.
 	always @(*) begin
-		data_next = data_ff;
-		keep_next = keep_ff;
-		lookahead_data_next = lookahead_data_ff;
-		lookahead_keep_next = lookahead_keep_ff;
-		word_valid_next = word_valid_ff;
-		lookahead_valid_next = lookahead_valid_ff;
+		out_data_next = out_data_ff;
+		out_keep_next = out_keep_ff;
+		buf_data_next = buf_data_ff;
+		buf_keep_next = buf_keep_ff;
+		out_valid_next = out_valid_ff;
+		buf_valid_next = buf_valid_ff;
 
-		if (write_fire_w) begin
-			if (lookahead_valid_ff) begin
-				data_next = lookahead_data_ff;
-				keep_next = lookahead_keep_ff;
-				word_valid_next = 1'b1;
-				lookahead_valid_next = 1'b0;
+		if (status_start) begin
+			out_valid_next = 1'b0;
+			buf_valid_next = 1'b0;
+		end
+
+		if (bus_wr_hs) begin
+			if (buf_valid_ff) begin
+				out_data_next = buf_data_ff;
+				out_keep_next = buf_keep_ff;
+				out_valid_next = 1'b1;
+				buf_valid_next = 1'b0;
 			end
 			else begin
-				word_valid_next = 1'b0;
+				out_valid_next = 1'b0;
 			end
 		end
 
-		if (s_fire_w) begin
-			if (!word_valid_next) begin
-				data_next = s_data_i;
-				keep_next = s_keep_i;
-				word_valid_next = 1'b1;
+		if (s_axis_hs) begin
+			if (!out_valid_next) begin
+				out_data_next = s_axis_tdata_i;
+				out_keep_next = s_axis_tkeep_i;
+				out_valid_next = 1'b1;
 			end
-			else if (!lookahead_valid_next) begin
-				lookahead_data_next = s_data_i;
-				lookahead_keep_next = s_keep_i;
-				lookahead_valid_next = 1'b1;
+			else if (!buf_valid_next) begin
+				buf_data_next = s_axis_tdata_i;
+				buf_keep_next = s_axis_tkeep_i;
+				buf_valid_next = 1'b1;
 			end
 		end
 	end
 
-	always @(posedge clk_i) begin
+	always @(negedge clk_i) begin
 		if (!rst_n_i) begin
-			data_ff <= {DATA_LEN{1'b0}};
-			lookahead_data_ff <= {DATA_LEN{1'b0}};
-			keep_ff <= {BE_LEN{1'b0}};
-			lookahead_keep_ff <= {BE_LEN{1'b0}};
-			word_valid_ff <= 1'b0;
-			lookahead_valid_ff <= 1'b0;
+			out_data_ff <= {DATA_LEN{1'b0}};
+			buf_data_ff <= {DATA_LEN{1'b0}};
+			out_keep_ff <= {BE_LEN{1'b0}};
+			buf_keep_ff <= {BE_LEN{1'b0}};
+			out_valid_ff <= 1'b0;
+			buf_valid_ff <= 1'b0;
 			prefetch_en_ff <= 1'b0;
-			source_ready_ff <= 1'b0;
-		end
-		else if (flush_i || clear_i) begin
-			data_ff <= {DATA_LEN{1'b0}};
-			lookahead_data_ff <= {DATA_LEN{1'b0}};
-			keep_ff <= {BE_LEN{1'b0}};
-			lookahead_keep_ff <= {BE_LEN{1'b0}};
-			word_valid_ff <= 1'b0;
-			lookahead_valid_ff <= 1'b0;
-			prefetch_en_ff <= 1'b0;
-			source_ready_ff <= 1'b0;
+			src_accept_en_ff <= 1'b0;
+			status_sel_d_ff <= 1'b0;
 		end
 		else begin
-			data_ff <= data_next;
-			lookahead_data_ff <= lookahead_data_next;
-			keep_ff <= keep_next;
-			lookahead_keep_ff <= lookahead_keep_next;
-			word_valid_ff <= word_valid_next;
-			lookahead_valid_ff <= lookahead_valid_next;
+			out_data_ff <= out_data_next;
+			buf_data_ff <= buf_data_next;
+			out_keep_ff <= out_keep_next;
+			buf_keep_ff <= buf_keep_next;
+			out_valid_ff <= out_valid_next;
+			buf_valid_ff <= buf_valid_next;
 			prefetch_en_ff <= prefetch_en_i;
-			source_ready_ff <= source_ready_w;
+			src_accept_en_ff <= src_accept_en;
+			status_sel_d_ff <= status_sel_i;
 		end
 	end
 
-	always @(posedge clk_i) begin
+	always @(negedge clk_i) begin
 		if (!rst_n_i)
-			bus_drive_ff <= 1'b0;
-		else if (clear_i)
 			bus_drive_ff <= 1'b0;
 		else begin
 			bus_drive_ff <= 1'b0;
 			if (arb_phase_i) begin
-				if (write_req_w)
+				if (bus_wr_req)
 					bus_drive_ff <= 1'b1;
 			end
 			else if (prefetch_phase_i || burst_phase_i) begin
-				if (word_valid_ff)
+				if (out_valid_ff)
 					bus_drive_ff <= 1'b1;
 			end
 		end
 	end
 
-	assign s_ready_o = !hold_i && prefetch_en_ff && source_ready_ff && buffer_ready_w;
-	assign word_valid_o = word_valid_ff;
-	assign idle_o = !word_valid_ff && !lookahead_valid_ff;
-	assign bus_data_o = data_ff;
-	assign bus_keep_o = keep_ff;
-	assign wr_n_o = !write_fire_w;
+	assign s_axis_tready_o = !block_i && prefetch_en_ff && src_accept_en_ff && buf_ready;
+	assign bus_valid_o = out_valid_ff;
+	assign idle_o = !out_valid_ff && !buf_valid_ff;
+	assign bus_data_o = out_data_ff;
+	assign bus_keep_o = out_keep_ff;
+	assign wr_n_o = !bus_wr_hs;
 	assign bus_drive_o = bus_drive_ff;
 
 endmodule

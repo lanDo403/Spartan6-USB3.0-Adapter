@@ -7,14 +7,24 @@ NET "FPGA_RESET" LOC = A23 | IOSTANDARD = "LVCMOS33";              								# IO_
 #=======================================
 # Bank 2
 NET "GPIO_CLK" LOC = AF14 | IOSTANDARD = "LVCMOS33";					 								 # IO_L29N_GCLK2_2          Sch = E14
-NET "GPIO_DATA[0]" LOC = AC20 | IOSTANDARD = "LVCMOS33" | SLEW = FAST | DRIVE = 8;             # IO_L5P_2                Sch = B6
-NET "GPIO_DATA[1]" LOC = AA19 | IOSTANDARD = "LVCMOS33" | SLEW = FAST | DRIVE = 8;             # IO_L6N_2                Sch = B7
-NET "GPIO_DATA[2]" LOC = AC17 | IOSTANDARD = "LVCMOS33" | SLEW = FAST | DRIVE = 8;             # IO_L15N_2                Sch = B8
-NET "GPIO_DATA[3]" LOC = AA17 | IOSTANDARD = "LVCMOS33" | SLEW = FAST | DRIVE = 8;             # IO_L10N_2                Sch = B9
-NET "GPIO_DATA[4]" LOC = W16 | IOSTANDARD = "LVCMOS33" | SLEW = FAST | DRIVE = 8;             # IO_L18N_2                Sch = B10
-NET "GPIO_DATA[5]" LOC = AB15 | IOSTANDARD = "LVCMOS33" | SLEW = FAST | DRIVE = 8;             # IO_L19P_2                Sch = B11
-NET "GPIO_DATA[6]" LOC = AC16 | IOSTANDARD = "LVCMOS33" | SLEW = FAST | DRIVE = 8;             # IO_L17P_2                Sch = B12
-NET "GPIO_DATA[7]" LOC = AA15 | IOSTANDARD = "LVCMOS33" | SLEW = FAST | DRIVE = 8;             # IO_L20N_2                Sch = B13
+# NET "GPIO_DATA[0]" LOC = AC20 | IOSTANDARD = "LVCMOS33" | SLEW = FAST | DRIVE = 8;             # IO_L5P_2                Sch = B6
+# NET "GPIO_DATA[1]" LOC = AA19 | IOSTANDARD = "LVCMOS33" | SLEW = FAST | DRIVE = 8;             # IO_L6N_2                Sch = B7
+# NET "GPIO_DATA[2]" LOC = AC17 | IOSTANDARD = "LVCMOS33" | SLEW = FAST | DRIVE = 8;             # IO_L15N_2                Sch = B8
+# NET "GPIO_DATA[3]" LOC = AA17 | IOSTANDARD = "LVCMOS33" | SLEW = FAST | DRIVE = 8;             # IO_L10N_2                Sch = B9
+# NET "GPIO_DATA[4]" LOC = W16 | IOSTANDARD = "LVCMOS33" | SLEW = FAST | DRIVE = 8;             # IO_L18N_2                Sch = B10
+# NET "GPIO_DATA[5]" LOC = AB15 | IOSTANDARD = "LVCMOS33" | SLEW = FAST | DRIVE = 8;             # IO_L19P_2                Sch = B11
+# NET "GPIO_DATA[6]" LOC = AC16 | IOSTANDARD = "LVCMOS33" | SLEW = FAST | DRIVE = 8;             # IO_L17P_2                Sch = B12
+# NET "GPIO_DATA[7]" LOC = AA15 | IOSTANDARD = "LVCMOS33" | SLEW = FAST | DRIVE = 8;             # IO_L20N_2                Sch = B13
+
+NET "GPIO_DATA[0]" LOC = AA15 | IOSTANDARD = "LVCMOS33" | SLEW = FAST | DRIVE = 8;             # IO_L5P_2                Sch = B6
+NET "GPIO_DATA[1]" LOC = AC16 | IOSTANDARD = "LVCMOS33" | SLEW = FAST | DRIVE = 8;             # IO_L6N_2                Sch = B7
+NET "GPIO_DATA[2]" LOC = AB15 | IOSTANDARD = "LVCMOS33" | SLEW = FAST | DRIVE = 8;             # IO_L15N_2                Sch = B8
+NET "GPIO_DATA[3]" LOC = W16 | IOSTANDARD = "LVCMOS33" | SLEW = FAST | DRIVE = 8;             # IO_L10N_2                Sch = B9
+NET "GPIO_DATA[4]" LOC = AA17 | IOSTANDARD = "LVCMOS33" | SLEW = FAST | DRIVE = 8;             # IO_L18N_2                Sch = B10
+NET "GPIO_DATA[5]" LOC = AC17 | IOSTANDARD = "LVCMOS33" | SLEW = FAST | DRIVE = 8;             # IO_L19P_2                Sch = B11
+NET "GPIO_DATA[6]" LOC = AA19 | IOSTANDARD = "LVCMOS33" | SLEW = FAST | DRIVE = 8;             # IO_L17P_2                Sch = B12
+NET "GPIO_DATA[7]" LOC = AC20 | IOSTANDARD = "LVCMOS33" | SLEW = FAST | DRIVE = 8;             # IO_L20N_2                Sch = B13
+
 NET "GPIO_STROB" LOC = Y14 | IOSTANDARD = "LVCMOS33" | SLEW = FAST | DRIVE = 8;               # IO_L28P_2                 Sch = B14
 #Bank 0
 # NET "GPIO_CLK" LOC = C13 | IOSTANDARD = "LVCMOS33";					 								 # IO_L34P_GCLK19_0          Sch = B13
@@ -106,12 +116,23 @@ NET "OE_N"           TNM = "M_FIFO_O";
 
 # FT601 IOB placement is constrained by source attributes in ft601_wrapper.v.
 
-TIMEGRP "M_FIFO_IO" OFFSET = IN 4 ns VALID 6.5 ns BEFORE "CLK" RISING;
-TIMEGRP "M_FLAG_I" OFFSET = IN 3.5 ns VALID 6.5 ns BEFORE "CLK" RISING;
+TIMEGRP "M_FIFO_IO" OFFSET = IN 4 ns VALID 6.5 ns BEFORE "CLK" FALLING;
+TIMEGRP "M_FLAG_I" OFFSET = IN 3.5 ns VALID 6.5 ns BEFORE "CLK" FALLING;
 
-TIMEGRP "M_FIFO_IO" OFFSET = OUT 9 ns VALID 4.2 ns AFTER "CLK" RISING;
-TIMEGRP "M_FIFO_O" OFFSET = OUT 9 ns VALID 4.2 ns AFTER "CLK" RISING;
+TIMEGRP "M_FIFO_IO" OFFSET = OUT 9 ns VALID 4.2 ns AFTER "CLK" FALLING;
+TIMEGRP "M_FIFO_O" OFFSET = OUT 9 ns VALID 4.2 ns AFTER "CLK" FALLING;
 
 # Relocating modules on chip for better slack.
-INST "ft601_fsm/*" AREA_GROUP = "AG_FT601" ;
+INST "ft601_fsm/*" AREA_GROUP = "AG_FT601";
+
+INST "mem_tx/*" AREA_GROUP = "AG_GPIO";
+INST "async_fifo/*" AREA_GROUP = "AG_GPIO";
+INST "gpio_wrapper/*" AREA_GROUP = "AG_GPIO";
+
+INST "loopback_fifo_write_adapter/*" AREA_GROUP = "AG_AXIS_FIFO_ADAPTERS";
+INST "normal_fifo_read_adapter/*" AREA_GROUP = "AG_AXIS_FIFO_ADAPTERS";
+INST "loopback_fifo_read_adapter/*" AREA_GROUP = "AG_AXIS_FIFO_ADAPTERS";
+
 AREA_GROUP "AG_FT601" RANGE = CLOCKREGION_X1Y4:CLOCKREGION_X1Y5;
+AREA_GROUP "AG_GPIO" RANGE = CLOCKREGION_X1Y1:CLOCKREGION_X1Y4;
+AREA_GROUP "AG_AXIS_FIFO_ADAPTERS" RANGE = CLOCKREGION_X1Y3:CLOCKREGION_X1Y5;

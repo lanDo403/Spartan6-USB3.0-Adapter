@@ -3,12 +3,21 @@
 #include "throughput.h"
 
 #include <algorithm>
+#include <atomic>
+#include <conio.h>
 #include <cstring>
 #include <fstream>
 #include <iomanip>
 #include <iostream>
+#include <sstream>
+#include <thread>
 
 namespace {
+
+constexpr ULONG RAW_READ_CHUNK_BYTES = 256u * 1024u;
+constexpr ULONG RAW_READ_TIMEOUT_MS = 100u;
+constexpr DWORD RAW_READ_STATS_PERIOD_MS = 1000u;
+constexpr DWORD RAW_READ_STATS_POLL_MS = 100u;
 
 struct PipeSummary {
     UCHAR interface_index;
@@ -192,6 +201,41 @@ bool VerifyRequiredPipes(FT_HANDLE h, std::string& err) {
     return true;
 }
 
+std::string IntervalLabel(uint64_t total_bytes) {
+    std::ostringstream oss;
+    oss << "Raw read interval (total " << total_bytes << " bytes)";
+    return oss.str();
+}
+
+void RawReadStatsWorker(const std::atomic<bool>& stop_requested,
+                        const std::atomic<uint64_t>& total_bytes) {
+    uint64_t prev_bytes = total_bytes.load();
+    ThroughputTimePoint prev_time = ThroughputNow();
+
+    while (!stop_requested.load()) {
+        for (DWORD waited_ms = 0;
+             waited_ms < RAW_READ_STATS_PERIOD_MS && !stop_requested.load();
+             waited_ms += RAW_READ_STATS_POLL_MS) {
+            Sleep(RAW_READ_STATS_POLL_MS);
+        }
+        if (stop_requested.load()) {
+            break;
+        }
+
+        const ThroughputTimePoint now = ThroughputNow();
+        const uint64_t current_bytes = total_bytes.load();
+        const uint64_t interval_bytes =
+            (current_bytes >= prev_bytes) ? (current_bytes - prev_bytes) : 0u;
+
+        PrintThroughput(IntervalLabel(current_bytes),
+                        interval_bytes,
+                        ThroughputSeconds(prev_time, now));
+
+        prev_bytes = current_bytes;
+        prev_time = now;
+    }
+}
+
 }  // namespace
 
 std::string StatusToStr(FT_STATUS st) {
@@ -202,6 +246,10 @@ std::string StatusToStr(FT_STATUS st) {
 bool IsDisconnectStatus(FT_STATUS st) {
     return st == FT_DEVICE_NOT_CONNECTED || st == FT_DEVICE_NOT_FOUND ||
            st == FT_INVALID_HANDLE;
+}
+
+bool IsRecoverablePipeStatus(FT_STATUS st) {
+    return IsDisconnectStatus(st) || st == FT_OTHER_ERROR;
 }
 
 void AbortPipeBestEffort(FT_HANDLE h, UCHAR pipe_id) {
@@ -399,22 +447,60 @@ bool DoReadToFile(FT_HANDLE h,
         *last_status = FT_OK;
     }
 
-    std::ofstream out(path, std::ios::binary);
-    if (!out) {
-        err = "Cannot open file: " + path;
+    FT_STATUS st = FT_SetStreamPipe(
+        h,
+        FALSE,
+        FALSE,
+        IN_PIPE,
+        RAW_READ_CHUNK_BYTES);
+    if (FT_FAILED(st)) {
+        if (last_status != nullptr) {
+            *last_status = st;
+        }
+        err = "FT_SetStreamPipe(0x82) failed: " + StatusToStr(st);
         return false;
     }
 
-    std::vector<uint8_t> buffer(CHUNK_BYTES);
+    st = FT_SetPipeTimeout(h, IN_PIPE, RAW_READ_TIMEOUT_MS);
+    if (FT_FAILED(st)) {
+        FT_ClearStreamPipe(h, FALSE, FALSE, IN_PIPE);
+        if (last_status != nullptr) {
+            *last_status = st;
+        }
+        err = "FT_SetPipeTimeout(0x82, raw read) failed: " + StatusToStr(st);
+        return false;
+    }
+
     uint64_t total = 0;
     bool got_payload = false;
+    bool stop_requested = false;
     ThroughputTimePoint active_start = ThroughputNow();
     ThroughputTimePoint active_end = active_start;
 
-    while (true) {
+    std::cout << "Raw read chunk size: " << RAW_READ_CHUNK_BYTES
+              << " bytes. Press 'q' to stop streaming read.\n";
+
+    std::ofstream out;
+    std::vector<uint8_t> buffer(RAW_READ_CHUNK_BYTES);
+    std::atomic<bool> stats_stop(false);
+    std::atomic<uint64_t> stats_total_bytes(0);
+    std::thread stats_thread(RawReadStatsWorker,
+                             std::ref(stats_stop),
+                             std::ref(stats_total_bytes));
+
+    while (!stop_requested) {
+        if (_kbhit()) {
+            const int ch = _getch();
+            if (ch == 'q' || ch == 'Q') {
+                stop_requested = true;
+                std::cout << "Read stop requested by user.\n";
+                break;
+            }
+        }
+
         ULONG got = 0;
         const ThroughputTimePoint read_start = ThroughputNow();
-        FT_STATUS st = FT_ReadPipe(
+        const FT_STATUS read_status = FT_ReadPipe(
             h,
             IN_PIPE,
             buffer.data(),
@@ -423,51 +509,96 @@ bool DoReadToFile(FT_HANDLE h,
             nullptr);
         const ThroughputTimePoint read_end = ThroughputNow();
 
-        if (st == FT_TIMEOUT) {
-            break;
+        if (read_status == FT_TIMEOUT) {
+            continue;
         }
 
-        if (FT_FAILED(st)) {
+        if (FT_FAILED(read_status)) {
             if (last_status != nullptr) {
-                *last_status = st;
+                *last_status = read_status;
             }
             AbortPipeBestEffort(h, IN_PIPE);
             err = "FT_ReadPipe(0x82) failed during raw dump after " +
-                  std::to_string(total) + " bytes: " + StatusToStr(st);
-            return false;
+                  std::to_string(total) + " bytes: " +
+                  StatusToStr(read_status);
+            break;
         }
 
         if (got == 0) {
-            break;
+            Sleep(1);
+            continue;
+        }
+
+        if (!out.is_open()) {
+            out.open(path.c_str(), std::ios::binary);
+            if (!out) {
+                err = "Cannot open file: " + path;
+                if (last_status != nullptr) {
+                    *last_status = FT_OTHER_ERROR;
+                }
+                break;
+            }
         }
 
         out.write(reinterpret_cast<const char*>(buffer.data()),
                   static_cast<std::streamsize>(got));
         if (!out) {
+            err = "File write error";
             if (last_status != nullptr) {
                 *last_status = FT_OTHER_ERROR;
             }
-            err = "File write error";
-            return false;
+            break;
         }
 
         total += got;
+        stats_total_bytes.store(total);
         if (!got_payload) {
             active_start = read_start;
             got_payload = true;
         }
         active_end = read_end;
-        std::cout << "\rReceived: " << total << " bytes" << std::flush;
     }
 
-    std::cout << "\n";
+    stats_stop.store(true);
+    if (stats_thread.joinable()) {
+        stats_thread.join();
+    }
+
+    if (out.is_open()) {
+        out.close();
+        if (!out && err.empty()) {
+            err = "File close error: " + path;
+            if (last_status != nullptr) {
+                *last_status = FT_OTHER_ERROR;
+            }
+        }
+    }
+
+    FT_ClearStreamPipe(h, FALSE, FALSE, IN_PIPE);
+    const FT_STATUS timeout_status = FT_SetPipeTimeout(h, IN_PIPE, TIMEOUT_MS);
+    if (FT_FAILED(timeout_status) && err.empty()) {
+        if (last_status != nullptr) {
+            *last_status = timeout_status;
+        }
+        err = "FT_SetPipeTimeout(0x82, default) failed: " +
+              StatusToStr(timeout_status);
+    }
+
+    if (!err.empty()) {
+        return false;
+    }
+
     out_bytes = total;
     if (got_payload) {
         PrintThroughput("Raw read throughput",
                         total,
                         ThroughputSeconds(active_start, active_end));
+        if (stop_requested) {
+            std::cout << "Raw read stopped by user after " << total
+                      << " bytes.\n";
+        }
     } else {
-        PrintThroughput("Raw read throughput", 0, 0.0);
+        std::cout << "Raw read: no payload bytes received.\n";
     }
     return true;
 }

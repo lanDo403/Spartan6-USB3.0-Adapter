@@ -19,12 +19,12 @@ module sram_dp
 	reg [DATA_LEN-1:0] sram [0:DEPTH-1];
 	reg [DATA_LEN-1:0] ram_data_ff;
 	
-	always @(posedge wr_clk) begin
+	always @(negedge wr_clk) begin
 		if (wen)
 			sram[wr_addr] <= data_i;
 	end
 	
-	always @(posedge rd_clk) begin
+	always @(negedge rd_clk) begin
 		ram_data_ff <= sram[rd_addr];
 	end
 	

@@ -2,46 +2,40 @@
 
 ## Назначение
 
-Проект описывает текущую RTL-архитектуру для `Xilinx Spartan-6` и `FTDI FT601` в режиме `245 synchronous FIFO`. Один bitstream поддерживает три рабочих сценария: передача GPIO-потока в ПК, возврат данных в loopback-режиме и служебный control/status обмен с хоста.
+Проект описывает RTL-архитектуру для `Xilinx Spartan-6` и `FTDI FT601` в режиме `245 synchronous FIFO`. Один bitstream поддерживает три рабочих сценария: передача GPIO-потока в ПК, возврат данных в loopback-режиме и служебный control/status обмен с хоста.
 
 После полного сброса система стартует в `normal mode`. Хост может переключать режимы и читать статус через framed service protocol без перепрошивки FPGA.
 
 ## Внешние интерфейсы
 
-Со стороны GPIO используются `GPIO_CLK`, `GPIO_DATA[7:0]`, `GPIO_STROB` и `FPGA_RESET`. `GPIO_CLK` задает write-домен. Байты на `GPIO_DATA[7:0]` захватываются по `GPIO_STROB`, после чего `packer8to32` собирает четыре байта в одно 32-битное слово для normal TX FIFO.
+Со стороны GPIO используются `GPIO_CLK`, `GPIO_DATA[7:0]`, `GPIO_STROB` и `FPGA_RESET`. `GPIO_CLK` задает write-домен. `GPIO_STROB` является признаком валидности текущего байта. `packer8to32` начинает упаковку по первому активному `GPIO_STROB`, затем в течение четырех GPIO-тактов формирует `data[31:0]` и `keep[3:0]`. Если внутри этого окна `GPIO_STROB=0`, соответствующая байтовая позиция заполняется нулем, а ее `keep`-бит равен `0`. Первый принятый байт попадает в младший байт 32-битного слова.
 
-`FPGA_RESET` - внешний active-high reset request. Он является главным сбросом проекта и влияет на оба внутренних домена, а также на физический `RESET_N`, который FPGA выдает в FT601.
+`FPGA_RESET` - внешний active-high reset request. Он является единственным сбросом внутренней логики ПЛИС и формирует доменные reset-сигналы для GPIO- и FT-домена.
 
 Со стороны FT601 используются сигналы synchronous FIFO bus: `CLK`, `TXE_N`, `RXF_N`, `OE_N`, `WR_N`, `RD_N`, `RESET_N`, `DATA[31:0]` и `BE[3:0]`. `CLK` формирует FT-домен. `TXE_N=0` означает, что FT601 готов принять слово от FPGA. `RXF_N=0` означает, что FT601 имеет слово для FPGA. `WR_N=0` записывает данные в FT601. `OE_N=0` вместе с `RD_N=0` разрешает чтение слова из FT601.
 
-`DATA[31:0]` и `BE[3:0]` являются двунаправленными шинами. Во время TX FPGA драйвит обе шины через `ft601_wrapper.v`; во время RX и reset они переводятся в tri-state.
+`DATA[31:0]` и `BE[3:0]` являются двунаправленными шинами. Во время TX ПЛИС формирует обе шины через `ft601_wrapper.v`; во время RX и reset они переводятся в tri-state.
 
 ## Система сброса
 
-Reset в проекте разделен по назначению. Есть физический hard reset через `FPGA_RESET`, есть локальный FT-state clear по service-команде, есть recovery clear для ошибок, есть TX prefetch flush при переключении источников. Эти действия не смешиваются в одну линию сброса.
+В проекте есть два reset-сигнала с разным назначением.
 
-`FPGA_RESET` проходит через `IBUF` в `top.v` и становится внутренним `fpga_reset_i`. Из него формируются два reset request:
+`FPGA_RESET` - внешний active-high reset request от платы. Это единственный reset, который сбрасывает внутреннюю RTL-логику ПЛИС. В `top.v` он проходит через `IBUF` и формирует два доменных reset request:
 
 ```verilog
 gpio_rst_req = fpga_reset_i;
 ft_rst_req   = fpga_reset_i;
 ```
 
-Для каждого домена используется `rst_sync.v`. Он асинхронно активирует reset и синхронно отпускает его в своем домене. В GPIO-домене результатом является `gpio_rst_n_i`, в FT-домене - `ft_rst_n_i`.
+Для GPIO- и FT-домена используется `rst_sync.v`: reset активируется асинхронно, а отпускается синхронно относительно своего clock. В GPIO-домене результатом является `gpio_rst_n_i`, в FT-домене - `ft_rst_n_i`.
 
-Физический reset FT601 формируется напрямую от внешнего reset request:
+`FPGA_RESET` очищает `gpio_wrapper`, `packer8to32`, write-side normal FIFO path, `ft601_wrapper`, `ft601_fsm`, RX/TX adapters, `rx_stream_router`, `cmd_decoder`, `status_source`, `loopback_fifo` и read-side normal FIFO path. После release `cmd_decoder` устанавливает `loopback_mode=0`, поэтому система стартует в `normal mode`.
 
-```verilog
-ft601_reset_n_i = ~fpga_reset_i;
-```
+`RESET_N` - отдельный active-low output ПЛИС в микросхему FT601. Он не используется как reset внутри RTL-модулей. В обычном состоянии `RESET_N=1`. Команда `CMD_FT601_RESET` формирует `RESET_N=0` на два такта `CLK` FT601, после чего сигнал снова возвращается в `1`.
 
-Этот сигнал приходит в `ft601_wrapper.v` и через `OBUF` выходит на pin `RESET_N`. Когда `FPGA_RESET=1`, FPGA держит `RESET_N=0`, `WR_N/RD_N/OE_N` находятся в неактивном состоянии, а `DATA/BE` не драйвятся. После отпускания `FPGA_RESET` FT601 получает `RESET_N=1`, а логика FPGA выходит из reset синхронно с соответствующими clock-доменами.
+`CMD_FT601_RESET` сбрасывает только внешнюю микросхему FT601. Эта команда не очищает FIFO, FSM, adapters, router, status source, диагностические sticky-флаги и не меняет `loopback_mode`.
 
-В GPIO-домене reset очищает `gpio_wrapper`, `packer8to32`, `tx_write_guard` и write-side `async_fifo`. В FT-домене reset очищает `ft601_fsm`, RX/TX adapters, `rx_stream_router`, `service_cmd_decoder`, `status_source`, `loopback_fifo` и read-side `async_fifo`. После reset `service_cmd_decoder` устанавливает `loopback_mode=0`, поэтому система находится в `normal mode`.
-
-Команда `CMD_RESET_FT_STATE` работает мягче. Она очищает локальное FT-domain state, RX/status/TX adapter state и recovery logic, переводит режим в normal и сохраняет содержимое normal TX async FIFO. Физический `RESET_N` FT601 при этом остается под управлением `FPGA_RESET`.
-
-Команды `CMD_CLR_TX_ERROR`, `CMD_CLR_RX_ERROR` и `CMD_CLR_ALL_ERROR` обслуживают recovery path. Они очищают диагностическое состояние и соответствующие recovery-clear импульсы, но не выполняют полный reset домена.
+Команда `CMD_CLR_SERVICE_ERROR` не является reset-командой. Она очищает только `service_frame_error` внутри `cmd_decoder.v`.
 
 ## Основная архитектура
 
@@ -49,9 +43,9 @@ ft601_reset_n_i = ~fpga_reset_i;
 
 Физическая граница FT601 находится в `ft601_wrapper.v`. Там стоят буферы `IBUFG`, `IBUF`, `OBUF`, `IOBUF`, входная регистрация `TXE_N/RXF_N`, output-регистры управляющих сигналов и регистры для `DATA/BE`. Wrapper принимает уже готовые внутренние сигналы от FSM/adapters и выдает безопасный внешний интерфейс FT601.
 
-`ft601_fsm.v` задает фазы доступа к FT601. RX-захват вынесен в `ft601_rx_adapter.v`; TX output/prefetch path вынесен в `ft601_tx_adapter.v`. Благодаря этому FSM координирует доступ к шине, а datapath хранится в отдельных блоках.
+`ft601_fsm.v` задает фазы доступа к FT601 и владеет сменой направления общей шины `DATA/BE`. Между RX- и TX-burst используется состояние `TURNAROUND`: в нем `WR_N`, `RD_N`, `OE_N` неактивны, а ПЛИС не формирует `DATA/BE`. RX-запрос имеет приоритет и может прервать TX burst через `TURNAROUND`, чтобы новые host-команды и loopback RX-пакеты не ждали окончания длинной TX-передачи. RX-захват вынесен в `ft601_rx_adapter.v`, TX output/prefetch path вынесен в `ft601_tx_adapter.v`, поэтому FSM координирует доступ к шине, а datapath хранится в отдельных блоках.
 
-Внутренние потоки связаны AXI-Stream-подобным контрактом: `valid`, `ready`, `data`, `keep`. Передача слова происходит при `valid && ready`. Источник держит `data/keep` стабильными, пока приемник не подтвердил передачу через `ready`. `keep[3:0]` соответствует `BE[3:0]`, а `data[31:0]` соответствует `DATA[31:0]`. Синхронные FIFO read ports обернуты в `sync_fifo_axis_source.v`, чтобы arbiter работал со стабильным stream, а не с raw `ren/empty/data`.
+Внутренние потоки связаны AXI-Stream-подобным контрактом: `valid`, `ready`, `data`, `keep`. Передача слова происходит при `valid && ready`. Источник держит `data/keep` стабильными, пока приемник не подтвердил передачу через `ready`. `keep[3:0]` соответствует `BE[3:0]`, а `data[31:0]` соответствует `DATA[31:0]`. Stream-порты модулей используют `s_axis_*` для входного потока и `m_axis_*` для выходного. Границы service/status frame задаются фиксированной длиной в два слова и локальной control-логикой. FIFO write/read ports обернуты в `axis_fifo_write_adapter.v` и `axis_fifo_read_adapter.v`, чтобы stream-логика работала со стабильным handshake, а не с raw FIFO-сигналами.
 
 Основные stream-ветки:
 
@@ -63,33 +57,35 @@ ft601_reset_n_i = ~fpga_reset_i;
 | `tx_axis_*` | общий TX stream после arbitration |
 | `ft_rx_axis_*` | поток слов, принятых от FT601 |
 
-`axis_tx_arbiter.v` выбирает источник для TX path. Приоритет фиксированный: status response, затем loopback при `loopback_mode=1`, затем normal TX FIFO при `loopback_mode=0`. Status frame удерживает источник до отправки двух слов: `STATUS_MAGIC` и `status_word`.
+`axis_tx_arbiter.v` выбирает источник для TX path. Приоритет фиксированный: status response, затем loopback при `loopback_mode=1`, затем normal TX FIFO при `loopback_mode=0`. Status frame удерживает источник до отправки двух слов: `STATUS_MAGIC` и `status_word`. Общий выход `tx_axis_*` зарегистрирован: если downstream не готов, `tx_axis_tdata/tx_axis_tkeep` не меняются, а normal/loopback payload не забирается внутрь arbiter-а раньше фактического handshake.
 
-`rx_stream_router.v` принимает слова от FT601 RX adapter и разделяет их на service traffic и loopback payload. Service frame потребляется внутри control path. Payload-слова в loopback mode записываются в `loopback_fifo` как `{BE, DATA}`.
+Если `CMD_GET_STATUS` принят во время подготовленного payload TX, status request переводит TX path в service-priority режим. Normal/loopback FIFO-read останавливается не только на время двухсловного status frame, но и до завершения host-side service-read фазы: payload снова разрешается после того, как FT601 деактивирует `TXE_N`. Локально подготовленное payload-слово на границе TX arbiter/adapter может быть отброшено, но содержимое самих FIFO не очищается. Это сделано для того, чтобы ответ на service-запрос начинался с `STATUS_MAGIC` и за ним в том же коротком чтении не добавлялись payload-слова.
+
+`rx_stream_router.v` принимает слова от FT601 RX adapter и разделяет их на service traffic и loopback payload. Service frame потребляется внутри control path. Payload-слова в loopback mode записываются в `loopback_fifo` как `{DATA, BE}`.
 
 ## Datapath режимов
 
 В `normal mode` данные идут от GPIO к ПК:
 
 ```text
-GPIO -> gpio_wrapper -> packer8to32 -> async_fifo -> sync_fifo_axis_source -> axis_tx_arbiter -> ft601_tx_adapter -> ft601_wrapper -> FT601 -> PC
+GPIO -> gpio_wrapper -> packer8to32 -> axis_fifo_write_adapter -> async_fifo -> axis_fifo_read_adapter -> axis_tx_arbiter -> ft601_tx_adapter -> ft601_wrapper -> FT601 -> PC
 ```
 
-GPIO-домен пишет слова в normal TX FIFO. FT-домен читает их через `sync_fifo_axis_source`, который держит front/lookahead слова и выдает `normal_axis_*`. FT601 RX path остается активным для service-команд.
+GPIO-домен пишет в normal TX FIFO слова `{DATA[31:0], BE[3:0]}` через `axis_fifo_write_adapter`. `BE` здесь формируется из `GPIO_STROB`, поэтому normal payload может содержать не только `4'hF`, но и частичные маски байтов. GPIO-интерфейс односторонний и не имеет внешнего `ready` к источнику. FT-домен читает FIFO через `axis_fifo_read_adapter`, который держит front/lookahead слова и выдает `normal_axis_*`. FT601 RX path остается активным для service-команд. Обычный raw write с ПК в `EP02` в normal mode не является источником normal FIFO и не должен восприниматься как echo-тест: источник normal payload - внешний GPIO-тракт.
 
 В `FT loopback mode` данные приходят с ПК и возвращаются обратно:
 
 ```text
-PC -> FT601 -> ft601_rx_adapter -> rx_stream_router -> loopback_fifo -> sync_fifo_axis_source -> axis_tx_arbiter -> ft601_tx_adapter -> FT601 -> PC
+PC -> FT601 -> ft601_rx_adapter -> rx_stream_router -> axis_fifo_write_adapter -> loopback_fifo -> axis_fifo_read_adapter -> axis_tx_arbiter -> ft601_tx_adapter -> FT601 -> PC
 ```
 
-Loopback FIFO хранит 36 бит на слово: `{BE[3:0], DATA[31:0]}`. Это сохраняет byte-enable информацию. Командные слова service frame в эту FIFO не записываются. Read-side loopback FIFO также проходит через `sync_fifo_axis_source`, поэтому loopback TX path соблюдает тот же `valid/ready/data/keep` contract.
+Loopback FIFO хранит 36 бит на слово: `{DATA[31:0], BE[3:0]}`. Это сохраняет byte-enable информацию. Командные слова service frame в эту FIFO не записываются. Write-side и read-side loopback FIFO подключены через `axis_fifo_write_adapter` и `axis_fifo_read_adapter`, поэтому loopback path соблюдает `valid/ready/data/keep` contract.
 
 Status path работает как отдельный TX-source. По `CMD_GET_STATUS` блок `status_source.v` формирует двухсловный response. Если TX burst уже активен, status ждет безопасное окно; если payload только ожидает отправки, status получает приоритет.
 
 ## Framed service protocol
 
-Service traffic идет по тем же endpoints, что и payload: команды пишутся в `EP02`, ответы читаются из `EP82`. Для service/status слов используется полный 32-битный beat с `BE=4'hF`.
+Service traffic идет по тем же endpoints, что и payload: команды пишутся в `EP02`, ответы читаются из `EP82`. Для service/status слов используется полное 32-битное слово с `BE=4'hF`.
 
 Команда состоит из двух 32-битных слов:
 
@@ -104,15 +100,11 @@ Parser распознает команду после полного слова 
 
 | Opcode | Значение | Действие |
 | --- | --- | --- |
-| `CMD_CLR_TX_ERROR` | `32'h00000001` | очистить TX diagnostic state |
-| `CMD_CLR_RX_ERROR` | `32'h00000002` | очистить RX diagnostic state |
-| `CMD_CLR_ALL_ERROR` | `32'h00000003` | очистить TX и RX errors |
+| `CMD_CLR_SERVICE_ERROR` | `32'h00000001` | очистить `service_frame_error` |
 | `CMD_SET_LOOPBACK` | `32'hA5A50004` | перейти в loopback mode |
 | `CMD_SET_NORMAL` | `32'hA5A50005` | вернуться в normal mode |
 | `CMD_GET_STATUS` | `32'hA5A50006` | запросить status response |
-| `CMD_RESET_FT_STATE` | `32'hA5A50007` | очистить локальное FT state с сохранением normal TX FIFO |
-
-`CMD_RESET_FT_STATE` реализован в RTL как служебная команда низкого уровня. В текущем `ft601_test` отдельного пункта меню для нее нет: ручная проверка строится вокруг `GET_STATUS`, `SET_LOOPBACK`, `SET_NORMAL`, loopback integrity и `CMD_CLR_*`.
+| `CMD_FT601_RESET` | `32'hA5A50007` | сформировать `RESET_N=0` для FT601 на два такта `CLK` |
 
 Ответ на `CMD_GET_STATUS`:
 
@@ -126,78 +118,71 @@ status_word
 | Биты | Значение |
 | --- | --- |
 | `0` | `loopback_mode` |
-| `1` | `tx_error` |
-| `2` | `rx_error` |
-| `3` | `tx_fifo_empty` |
-| `4` | `tx_fifo_full` |
-| `5` | `loopback_fifo_empty` |
-| `6` | `loopback_fifo_full` |
-| `31:7` | `0` |
+| `1` | `service_frame_error` |
+| `2` | `tx_fifo_empty` |
+| `3` | `tx_fifo_full` |
+| `4` | `loopback_fifo_empty` |
+| `5` | `loopback_fifo_full` |
+| `31:6` | `0` |
 
-## Mode switch и recovery
+## Mode switch и diagnostic clear
 
-Переходы между `normal` и `loopback` выполняет `service_cmd_decoder.v`. При смене режима он выставляет `service_hold`, дожидается idle-состояния FT path, формирует локальный clear для FT state, flush-ит TX prefetch path и только потом фиксирует новый `loopback_mode`.
+Переходы между `normal` и `loopback` выполняет `cmd_decoder.v`. При смене режима decoder выставляет `mode_switch_busy`, дожидается idle-состояния FT path и только после этого фиксирует новый `loopback_mode`. Переключение режима не выполняет reset FT-домена и не очищает FIFO.
 
-`service_hold` блокирует новые операции на время controlled switch. `tx_flush` очищает pending word внутри TX adapter. Recovery clear очищает диагностическое состояние и выдает clear-импульсы в нужный FIFO path.
+`mode_switch_busy` нужен только как временный запрет новых service/TX действий во время безопасной смены режима. Он не является reset или flush сигналом.
+
+Diagnostic clear отделен от reset. В текущей RTL-модели удерживаемым диагностическим флагом является только `service_frame_error`. Его очищает команда `CMD_CLR_SERVICE_ERROR`.
 
 ## Диагностика
 
-Внешний статус содержит агрегированные `tx_error` и `rx_error`. Эти флаги формируются из событий подсистемы:
+Внешний статус содержит один удерживаемый диагностический флаг: `service_frame_error`. Он выставляется, если после `CMD_MAGIC` принято неполное opcode-слово. Флаг удерживается до service-команды очистки.
 
-| Агрегат | События |
+`full` и `empty` у `async_fifo` и `loopback_fifo` являются обычными состояниями FIFO. Они запрещают запись или чтение на тот такт, где операция невозможна, но не превращаются в sticky error. Когда место в FIFO появляется или данные становятся доступны, поток продолжает работу без обязательной диагностической очистки.
+
+| Флаг | Событие |
 | --- | --- |
-| `tx_error` | запрос записи в full normal TX FIFO; запрос чтения из empty normal TX FIFO |
-| `rx_error` | запрос записи в full loopback FIFO; запрос чтения из empty loopback FIFO |
+| `service_frame_error` | после `CMD_MAGIC` принято не полное 32-битное opcode-слово |
 
-Ошибки удерживаются до service-команды очистки. `CMD_CLR_TX_ERROR` очищает TX-состояние, `CMD_CLR_RX_ERROR` очищает RX-состояние, `CMD_CLR_ALL_ERROR` очищает оба направления. Текущие значения попадают в `status_word[1]` и `status_word[2]`.
+Обычный `valid && !ready` на внутреннем stream-интерфейсе сам по себе не считается ошибкой. `CMD_CLR_SERVICE_ERROR` очищает `service_frame_error`.
 
 ## FT601 handshake и timing
 
 На внешней границе FT601 используются зарегистрированные управляющие сигналы. `TXE_N` и `RXF_N` принимаются через `ft601_wrapper.v`, регистрируются в FT-домене и затем используются FSM/adapters. `WR_N`, `RD_N`, `OE_N`, `DATA`, `BE` также проходят через зарегистрированную boundary-логику wrapper.
 
-TX path работает от общего `tx_axis_*` stream. Когда выбранный источник имеет данные, `ft601_tx_adapter.v` подготавливает слово, управляет prefetch/output-регистрами, выставляет `DATA/BE` и активирует `WR_N` только в write-фазе. `drive_tx` управляет tri-state отдельно от `WR_N`, поэтому шина данных включается и выключается явно.
+TX path работает от общего `tx_axis_*` stream. Когда выбранный источник имеет данные, `ft601_tx_adapter.v` подготавливает слово, управляет prefetch/output-регистрами, выставляет `DATA/BE` и активирует `WR_N` только в write-фазе. `drive_tx` управляет tri-state отдельно от `WR_N`, поэтому шина данных включается и выключается явно. При смене направления `ft601_fsm.v` проходит через `TURNAROUND`, где write/read стороны FT601 bus одновременно не активны.
 
-RX path работает через `ft601_rx_adapter.v`. FSM активирует read-фазы, adapter управляет `OE_N/RD_N`, сэмплирует `DATA/BE` и выдает слово в `ft_rx_axis_*`. Backpressure приходит через `ft_rx_axis_tready`: в loopback mode он зависит от свободного места в `loopback_fifo`, в normal mode RX path готов принимать service traffic.
+RX path работает через `ft601_rx_adapter.v`. FSM активирует read-фазы, adapter управляет `OE_N/RD_N`, сэмплирует `DATA/BE` и выдает слово в `ft_rx_axis_*`. Внутри adapter есть небольшая очередь для принятых слов и незавершенных read-операций, поэтому `ft_rx_axis_tvalid/tdata/tkeep` удерживаются до `valid && ready`. Commit принятого слова выполняется только пока зарегистрированный `RXF_N` остается активным; это не дает последнему stale-слову попасть в stream, если FT601 закрыл RX-поток на границе пакета. Backpressure приходит через `ft_rx_axis_tready`: в loopback mode он зависит от свободного места в `loopback_fifo`, в normal mode RX path готов принимать service traffic. Управление `RD_N/OE_N` опирается на локальный credit adapter, а не на прямую downstream-ready цепочку.
 
-Основные требования к handshake: отсутствует прямой combinational path от `TXE_N/RXF_N` pad к `WR_N/RD_N/OE_N`; `WR_N` и `drive_tx` остаются независимыми; при backpressure слова сохраняют порядок; во время active write `DATA/BE` стабильны; во время RX и reset FPGA не драйвит FT601 data bus.
+Основные требования к handshake: отсутствует прямой combinational path от `TXE_N/RXF_N` pad к `WR_N/RD_N/OE_N`; `WR_N` и `drive_tx` остаются независимыми; `WR_N` и `OE_N` не активируются одновременно; при backpressure слова сохраняют порядок; во время active write `DATA/BE` стабильны; во время RX и reset ПЛИС не формирует FT601 data bus.
 
 ## Проверка
 
-Основной самопроверочный стенд - `source/testbench.v`. Он проверяет reset, старт в `normal mode`, GPIO-to-FT601 path, runtime-вход в loopback, возврат в normal, status frame, recovery commands, backpressure и отделение service traffic от payload.
+Основной самопроверочный стенд - `source/testbench.v`. Верхний flow проверяет reset, normal path, loopback path, diagnostics, две активные диагностические регрессии, FT601 boundary и payload boundary. Это соответствует текущему набору проверок RTL: базовые сценарии подтверждают рабочие режимы, а диагностические регрессии защищают участки, которые проверялись на плате.
+
+Постоянные мониторы работают независимо от сценария. Они проверяют, что `WR_N` и `OE_N` не активны одновременно, запись не идет при закрытом `TXE_N`, чтение не идет при закрытом `RXF_N`, `DATA/BE` не конфликтуют на общей шине, а внутренние stream-линии удерживают `valid/data/keep` при `valid && !ready`. Фиксированная latency FTDI reference-дизайна не является pass/fail критерием.
 
 ### Сценарии использования
 
-Testbench построен вокруг сценариев, которые соответствуют реальным действиям с платой и `ft601_test`.
+Сначала проверяется базовый запуск. Пользователь включает плату или нажимает `FPGA_RESET`, после чего дизайн должен выйти в безопасное состояние, снять внутренние reset-сигналы ПЛИС и стартовать в `normal mode`. `RESET_N` FT601 при этом остается в неактивном состоянии `1`, если не была отправлена команда `CMD_FT601_RESET`.
 
-Сначала проверяется базовый запуск. Пользователь включает плату или нажимает `FPGA_RESET`, после чего дизайн должен выйти в безопасное состояние, отпустить `RESET_N` для FT601 и стартовать в `normal mode`.
+В `normal mode` проверяется основной поток от GPIO к ПК. Дизайн принимает байты со стороны GPIO, собирает их в 32-битные слова, формирует `BE` из `GPIO_STROB`, кладет `{DATA, BE}` в normal TX FIFO и отдает в FT601 без перестановок и потери маски байтов.
 
-Дальше хост запрашивает статус FPGA. Это базовая проверка связи PC -> FT601 -> FPGA -> FT601 -> PC: команда `GET_STATUS` должна вернуть статусный frame, где видно, что loopback выключен, ошибки не выставлены, а FIFO находятся в ожидаемом состоянии.
+В `loopback mode` пользователь включает режим командой `SET_LOOPBACK`, подтверждает его через status и отправляет payload с ПК. Принятые слова должны пройти через RX path, loopback FIFO и TX arbiter обратно в FT601. После `FPGA_RESET` режим возвращается в `normal`, а повторное включение loopback снова должно давать корректный возврат payload.
 
-В `normal mode` проверяется основной поток данных от GPIO к ПК. Дизайн принимает байты со стороны GPIO, собирает их в 32-битные слова, кладет в normal TX FIFO и отдает их в FT601 без перестановок и потери `BE`.
-
-Затем пользователь включает loopback командой `SET_LOOPBACK` и подтверждает режим через `GET_STATUS`. После этого можно отправить payload с ПК и прочитать его обратно. Принятые слова должны совпасть с отправленными слово в слово.
-
-После проверки loopback пользователь возвращает дизайн в `normal mode` командой `SET_NORMAL` и снова подтверждает состояние через `GET_STATUS`. Дальнейшая передача должна снова идти из normal GPIO path, а не из loopback FIFO.
-
-Отдельный сценарий проверяет loopback после сброса. Сначала loopback включается и проходит короткий payload compare, затем подается `FPGA_RESET`, после release режим должен вернуться в `normal`. После повторного `SET_LOOPBACK` loopback payload compare должен снова пройти.
-
-Диагностика проверяется через команды очистки. Testbench создает диагностическое состояние, затем выполняет `CMD_CLR_TX_ERROR`, `CMD_CLR_RX_ERROR` и `CMD_CLR_ALL_ERROR`. Результат каждый раз проверяется не чтением внутренних регистров, а обычным `GET_STATUS`.
-
-Последний базовый сценарий - backpressure. Он моделирует ситуации, когда FT601 временно не готов принимать данные или не имеет данных для чтения. Дизайн не должен писать при `TXE_N=1`, не должен читать при `RXF_N=1`, не должен портить порядок payload и не должен создавать конфликт на `DATA/BE`.
+В diagnostics-сценарии проверяются status frame, команда очистки service-ошибки и команда `CMD_FT601_RESET`. Status читается несколько раз подряд. Через `GET_STATUS` проверяются текущий режим, empty/full состояния FIFO и `service_frame_error`; очистка диагностического флага проверяется командой `CMD_CLR_SERVICE_ERROR`.
 
 ### Техническое покрытие сценариев
 
 | Сценарий | Что делает testbench | Критерий прохождения |
 | --- | --- | --- |
-| `reset_boot_normal` | Активирует `FPGA_RESET`, проверяет inactive `WR_N/RD_N/OE_N`, tri-state `DATA/BE`, release доменных reset и `RESET_N`. | После release дизайн в `normal mode`, FT601 bus безопасен. |
-| `get_status_after_reset` | Отправляет `CMD_MAGIC + CMD_GET_STATUS` по RX path и открывает TX path для ответа. | На TX выходит `STATUS_MAGIC + status_word`, `loopback_mode=0`, ошибок нет. |
-| `normal_payload_integrity` | Подает байтовый поток в GPIO/packer path, держит FT601 TX закрытым, затем разрешает передачу. | FT601 TX получает ожидаемые 32-битные слова в том же порядке, `BE=4'hF`, RX path не активируется. |
-| `set_loopback_and_status` | Отправляет `CMD_SET_LOOPBACK`, затем `CMD_GET_STATUS`. | Status подтверждает `loopback_mode=1`. |
-| `loopback_payload_integrity` | В loopback mode подает payload через FT601 RX и затем разрешает FT601 TX. | Количество, порядок, `DATA` и `BE` на TX совпадают с отправленным RX payload. |
-| `set_normal_and_status` | Отправляет `CMD_SET_NORMAL`, затем `CMD_GET_STATUS`, после этого повторяет normal payload check. | Status подтверждает `loopback_mode=0`, TX source снова normal path. |
-| `loopback_after_reset` | Выполняет короткий loopback compare, подает `FPGA_RESET`, повторно включает loopback и снова сравнивает payload. | Reset очищает режим, повторный loopback работает без ручной правки внутренних состояний. |
-| `diagnostic_clear` | Инжектирует диагностические TX/RX error-состояния, отправляет `CMD_CLR_TX_ERROR`, `CMD_CLR_RX_ERROR`, `CMD_CLR_ALL_ERROR`. | После каждой команды `GET_STATUS` показывает ожидаемые `tx_error/rx_error`. |
-| `ft_backpressure` | Держит `TXE_N=1` при pending TX payload, затем разрешает TX; отдельно держит `RXF_N=1`. | Нет записи при закрытом TX, нет чтения при пустом RX, payload не продвигается во время backpressure. |
+| `reset_boot_normal` | Активирует `FPGA_RESET`, проверяет inactive `WR_N/RD_N/OE_N`, tri-state `DATA/BE`, release доменных reset и неактивный `RESET_N=1`. | После release дизайн в `normal mode`, FT601 bus безопасен. |
+| `normal_path` | Подает байтовый поток в GPIO/packer path, держит FT601 TX закрытым, затем разрешает передачу. | FT601 TX получает ожидаемые 32-битные слова и ожидаемую `BE`-маску из `GPIO_STROB`; порядок сохраняется, RX path не активируется. |
+| `loopback_path` | Включает loopback, выполняет полный payload compare, затем проверяет loopback после `FPGA_RESET` и повторного `SET_LOOPBACK`. | Количество, порядок, `DATA` и `BE` на TX совпадают с отправленным RX payload; reset возвращает режим в `normal`. |
+| `loopback_counter64_diagnostic` | Передает в loopback `64` 32-битных слова счетчика, повторяя payload из `ft601_test`. | Количество принятых RX-слов, записей loopback FIFO, чтений loopback FIFO и TX-слов равно `64`; первое и последнее слова сохраняются. |
+| `service_status_diagnostic` | Запрашивает status при заполненном loopback FIFO и активном service/status path. | Status frame выходит как `STATUS_MAGIC + status_word`, а payload не вклинивается в короткое service-read окно. |
+| `diagnostics` | Проверяет repeated `GET_STATUS`, `service_frame_error`, `CMD_CLR_SERVICE_ERROR`, `SET_LOOPBACK`, `SET_NORMAL` и двухтактный `RESET_N` от `CMD_FT601_RESET`. | Status frame всегда начинается с `STATUS_MAGIC`, diagnostic bits соответствуют ожидаемому состоянию, `CMD_CLR_SERVICE_ERROR` очищает `service_frame_error`, `CMD_FT601_RESET` не сбрасывает RTL. |
+| `ft601_boundary` | Создает pending TX payload, затем активирует RXF_N как при ChipScope-захвате с одновременной готовностью TX/RX. | `WR_N` не пересекается с `OE_N/RD_N`, `DATA/BE` корректно переключаются между drive и tri-state, RX получает приоритет через безопасную смену направления. |
+| `payload_boundary` | Передает loopback payload больше `1024` слов, делает RX/TX-паузы на границах `128` слов и проверяет внутренние счетчики RX/FIFO/TX. | На границах пакетов не появляются adjacent-дубли и stale-слова; количество принятых, записанных, прочитанных и отправленных слов совпадает. |
 
 Обязательные локальные команды:
 
@@ -210,10 +195,10 @@ verilator_bin.exe --lint-only --timing testbench.v
 
 После timing-sensitive RTL-изменений используется ISE flow. Минимум - `xst -ifn top.xst -ofn top.syr`. Для оценки частоты нужны post-PAR отчеты `top.twr` и `top.twx`.
 
-Host-side проверка выполняется через `ft601_test`. Базовый сценарий: `GET_STATUS`, `SET_LOOPBACK`, `Loopback integrity test`, `SET_NORMAL`, `CLR_ALL_ERROR`, снова `GET_STATUS`. При исправном loopback отправленный payload совпадает с принятым слово в слово.
+Host-side проверка выполняется через `ft601_test`. Базовый сценарий: `GET_STATUS`, `SET_LOOPBACK`, `Write test payload`, `Read payload to file`, `SET_NORMAL`, `CLR_SERVICE_ERROR`, снова `GET_STATUS`. Raw-операция `Write test payload` создает `64` значения счетчика, сохраняет `*_raw_tx.bin` и отправляет каждое значение четырьмя байтами: `00 00 00 01`, `00 00 00 02` и далее. `Read payload to file` включает потоковое чтение `EP82` чанками по `256 KiB`, работает до нажатия `q`, сохраняет фактически принятый raw dump и не сравнивает его с TX-файлом. Для raw read утилита использует `FT_SetStreamPipe`, временно ставит короткий timeout на `EP82` для проверки клавиши остановки, печатает статистику из отдельного stats-потока примерно раз в секунду, затем выполняет `FT_ClearStreamPipe` и возвращает обычный timeout для status-read. Все menu-action, кроме отрисовки меню, получают timestamp-маркеры в `log.txt`.
 
-## Исходники текущей архитектуры
+## Исходники архитектуры
 
-Ключевые RTL-файлы: `top.v`, `ft601_wrapper.v`, `ft601_fsm.v`, `ft601_rx_adapter.v`, `ft601_tx_adapter.v`, `sync_fifo_axis_source.v`, `axis_tx_arbiter.v`, `rx_stream_router.v`, `service_cmd_decoder.v`, `status_source.v`, `async_fifo.v`, `loopback_fifo.v`, `sram_dualport.v`, `tx_write_guard.v`, `gpio_wrapper.v`, `packer8to32.v`, `rst_sync.v`, `bit_sync.v`, `pulse_sync.v`.
+Ключевые RTL-файлы: `top.v`, `ft601_wrapper.v`, `ft601_fsm.v`, `ft601_rx_adapter.v`, `ft601_tx_adapter.v`, `axis_fifo_write_adapter.v`, `axis_fifo_read_adapter.v`, `axis_tx_arbiter.v`, `rx_stream_router.v`, `cmd_decoder.v`, `status_source.v`, `async_fifo.v`, `loopback_fifo.v`, `sram_dualport.v`, `gpio_wrapper.v`, `packer8to32.v`, `rst_sync.v`, `bit_sync.v`, `pulse_sync.v`.
 
 Ограничения лежат в `source/callistoS6.ucf`. Testbench - `source/testbench.v`. Host-side проверка - в `ft601_test/`.

@@ -1,93 +1,59 @@
+#include "app_log.h"
 #include "payload_test.h"
 
 #include "ft601_device.h"
 #include "service_protocol.h"
 #include "throughput.h"
 
-#include <iomanip>
+#include <fstream>
 #include <iostream>
-#include <limits>
-#include <sstream>
+#include <vector>
 
-std::vector<uint32_t> GenerateDeterministicPayload(size_t word_count) {
-    std::vector<uint32_t> payload(word_count);
-    uint32_t x = 0x13579BDFu;
+namespace {
 
-    for (size_t i = 0; i < word_count; ++i) {
-        x = x * 1664525u + 1013904223u;
-        payload[i] = x ^ (static_cast<uint32_t>(i) * 0x9E3779B9u);
-    }
-
-    return payload;
-}
-
-bool WritePayload(FT_HANDLE h,
-                  const std::vector<uint32_t>& payload,
-                  std::string& err,
-                  FT_STATUS* last_status) {
-    return WriteWords(h, payload, err, last_status);
-}
-
-bool ComparePayload(const std::vector<uint32_t>& tx,
-                    const std::vector<uint32_t>& rx,
-                    std::string& err) {
-    if (tx.size() != rx.size()) {
-        err = "Payload size mismatch: expected " + std::to_string(tx.size()) +
-              " words, got " + std::to_string(rx.size()) + " words";
+bool SaveWordsBinary(const std::string& path,
+                     const std::vector<uint32_t>& words,
+                     std::string& err) {
+    std::ofstream out(path.c_str(), std::ios::binary);
+    if (!out) {
+        err = "Cannot create binary file: " + path;
         return false;
     }
 
-    for (size_t i = 0; i < tx.size(); ++i) {
-        if (tx[i] != rx[i]) {
-            std::ostringstream oss;
-            oss << "Payload mismatch at word " << i
-                << " byte offset " << (i * sizeof(uint32_t))
-                << ": expected 0x" << std::hex << std::setw(8)
-                << std::setfill('0') << tx[i]
-                << ", got 0x" << std::setw(8) << rx[i];
-            err = oss.str();
-            return false;
-        }
+    if (!words.empty()) {
+        out.write(reinterpret_cast<const char*>(words.data()),
+                  static_cast<std::streamsize>(words.size() *
+                                               sizeof(uint32_t)));
+    }
+
+    if (!out) {
+        err = "Binary file write failed: " + path;
+        return false;
     }
 
     return true;
 }
 
-size_t ReadPayloadWordCount() {
-    std::cout << "Payload words [" << DEFAULT_LOOPBACK_WORDS
-              << ", max " << MAX_LOOPBACK_WORDS << "]: ";
-
-    std::cin.ignore(std::numeric_limits<std::streamsize>::max(), '\n');
-
-    std::string line;
-    if (!std::getline(std::cin, line) || line.empty()) {
-        return DEFAULT_LOOPBACK_WORDS;
-    }
-
-    std::istringstream iss(line);
-    size_t word_count = DEFAULT_LOOPBACK_WORDS;
-    if (!(iss >> word_count)) {
-        return DEFAULT_LOOPBACK_WORDS;
-    }
-
-    if (word_count == 0) {
-        return DEFAULT_LOOPBACK_WORDS;
-    }
-
-    if (word_count > MAX_LOOPBACK_WORDS) {
-        std::cout << "Clamping payload to " << MAX_LOOPBACK_WORDS
-                  << " words.\n";
-        return MAX_LOOPBACK_WORDS;
-    }
-
-    return word_count;
+uint32_t BuildRawTestWord(uint32_t word_index) {
+    const uint32_t counter = word_index + 1u;
+    return ((counter & 0x000000FFu) << 24u) |
+           ((counter & 0x0000FF00u) << 8u) |
+           ((counter & 0x00FF0000u) >> 8u) |
+           ((counter & 0xFF000000u) >> 24u);
 }
+
+}  // namespace
 
 bool DoWriteTestPayload(FT_HANDLE h, std::string& err, FT_STATUS* last_status) {
     std::vector<uint32_t> payload(WRITE_WORD_COUNT);
     for (uint32_t i = 0; i < payload.size(); ++i) {
-        payload[i] = i + 1;
+        payload[i] = BuildRawTestWord(i);
     }
+
+    const uint64_t bytes = static_cast<uint64_t>(payload.size()) *
+                           sizeof(uint32_t);
+    std::cout << "Generated raw TX pattern: " << payload.size()
+              << " words, " << bytes << " bytes.\n";
 
     const ThroughputTimePoint start = ThroughputNow();
     if (!WriteWords(h, payload, err, last_status)) {
@@ -95,66 +61,31 @@ bool DoWriteTestPayload(FT_HANDLE h, std::string& err, FT_STATUS* last_status) {
     }
 
     const double seconds = ThroughputSeconds(start, ThroughputNow());
-    const uint64_t bytes = static_cast<uint64_t>(payload.size()) *
-                           sizeof(uint32_t);
     PrintThroughput("Write payload throughput", bytes, seconds);
+
+    const std::string tx_file = MakeDataFileName("raw", "tx", "bin");
+    if (!SaveWordsBinary(tx_file, payload, err)) {
+        return false;
+    }
+    std::cout << "TX payload saved to " << tx_file << "\n";
     return true;
 }
 
-bool DoLoopbackIntegrityTest(FT_HANDLE h,
-                             size_t word_count,
-                             std::string& err,
-                             FT_STATUS* last_status) {
-    std::cout << "Entering loopback mode...\n";
-    if (!SendCommandFrame(h, CMD_SET_LOOPBACK, err, last_status)) {
+bool DoReadTestPayload(FT_HANDLE h,
+                       std::string& out_file,
+                       uint64_t& out_bytes,
+                       std::string& err,
+                       FT_STATUS* last_status) {
+    out_file = MakeDataFileName("raw", "rx", "bin");
+
+    if (!DoReadToFile(h, out_file, err, out_bytes, last_status)) {
+        out_file.clear();
+        out_bytes = 0;
         return false;
     }
 
-    uint32_t status_word = 0;
-    if (!RequestStatus(h, status_word, err, last_status)) {
-        return false;
+    if (out_bytes == 0) {
+        out_file.clear();
     }
-    PrintStatusWord(status_word);
-
-    if ((status_word & 1u) == 0) {
-        err = "FPGA did not enter loopback mode";
-        return false;
-    }
-
-    std::cout << "Generating " << word_count << " payload words...\n";
-    const std::vector<uint32_t> tx = GenerateDeterministicPayload(word_count);
-    const uint64_t payload_bytes = static_cast<uint64_t>(tx.size()) *
-                                   sizeof(uint32_t);
-
-    std::cout << "Writing payload to EP02...\n";
-    const ThroughputTimePoint total_start = ThroughputNow();
-    const ThroughputTimePoint write_start = total_start;
-    if (!WritePayload(h, tx, err, last_status)) {
-        return false;
-    }
-    const ThroughputTimePoint write_end = ThroughputNow();
-
-    std::cout << "Reading exact loopback payload from EP82...\n";
-    std::vector<uint32_t> rx;
-    const ThroughputTimePoint read_start = ThroughputNow();
-    if (!ReadExactWords(h, tx.size(), rx, err, last_status)) {
-        return false;
-    }
-    const ThroughputTimePoint read_end = ThroughputNow();
-
-    if (!ComparePayload(tx, rx, err)) {
-        return false;
-    }
-
-    PrintThroughput("Loopback write throughput",
-                    payload_bytes,
-                    ThroughputSeconds(write_start, write_end));
-    PrintThroughput("Loopback read throughput",
-                    payload_bytes,
-                    ThroughputSeconds(read_start, read_end));
-    PrintThroughput("Loopback round-trip throughput",
-                    payload_bytes * 2u,
-                    ThroughputSeconds(total_start, read_end));
-    std::cout << "LOOPBACK PASS: " << tx.size() << " words verified.\n";
     return true;
 }

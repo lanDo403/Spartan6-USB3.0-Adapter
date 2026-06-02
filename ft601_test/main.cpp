@@ -1,3 +1,4 @@
+#include "app_log.h"
 #include "ft601_device.h"
 #include "payload_test.h"
 #include "service_protocol.h"
@@ -9,18 +10,34 @@
 
 namespace {
 
+class ActionScope {
+public:
+    explicit ActionScope(const char* name) : name_(name) {
+        std::cout << "\n--- " << MakeTimestampString()
+                  << " START " << name_ << " ---\n";
+    }
+
+    ~ActionScope() {
+        std::cout << "--- " << MakeTimestampString()
+                  << " END   " << name_ << " ---\n";
+    }
+
+private:
+    const char* name_;
+};
+
 int ReadMenuChoice() {
+    LogSilenceGuard hide_menu_from_log;
+
     std::cout << "\nSelect action:\n";
     std::cout << "1) Write test payload (" << WRITE_WORD_COUNT << " words)\n";
     std::cout << "2) Read payload to file\n";
-    std::cout << "3) Loopback integrity test\n";
-    std::cout << "4) Get FPGA status\n";
-    std::cout << "5) Set loopback mode\n";
-    std::cout << "6) Set normal mode\n";
-    std::cout << "7) Clear TX error\n";
-    std::cout << "8) Clear RX error\n";
-    std::cout << "9) Clear all errors\n";
-    std::cout << "10) Exit\n";
+    std::cout << "3) Get FPGA status\n";
+    std::cout << "4) Set loopback mode\n";
+    std::cout << "5) Set normal mode\n";
+    std::cout << "6) Clear service frame error\n";
+    std::cout << "7) Reset FT601\n";
+    std::cout << "8) Exit\n";
     std::cout << "Select: ";
 
     int choice = -1;
@@ -38,7 +55,7 @@ bool TryReopenAndRetry(FT_HANDLE& h,
                        std::string& err,
                        const char* retry_label,
                        bool (*operation)(FT_HANDLE, std::string&, FT_STATUS*)) {
-    if (!IsDisconnectStatus(op_status)) {
+    if (!IsRecoverablePipeStatus(op_status)) {
         return false;
     }
 
@@ -57,6 +74,7 @@ bool TryReopenAndRetry(FT_HANDLE& h,
 }
 
 void HandleWritePayload(FT_HANDLE& h) {
+    ActionScope action("write_payload");
     std::string err;
     FT_STATUS op_status = FT_OK;
 
@@ -70,52 +88,44 @@ void HandleWritePayload(FT_HANDLE& h) {
 }
 
 void HandleReadToFile(FT_HANDLE& h) {
-    const std::string out_file = "rx_dump.bin";
+    ActionScope action("read_payload");
+    std::string out_file;
     std::string err;
     uint64_t bytes = 0;
     FT_STATUS op_status = FT_OK;
 
-    std::cout << "Reading raw payload until timeout (" << TIMEOUT_MS
-              << " ms) -> " << out_file << "\n";
+    std::cout << "Reading payload from EP82. Press q to stop streaming read.\n";
 
-    if (!DoReadToFile(h, out_file, err, bytes, &op_status)) {
+    if (!DoReadTestPayload(h, out_file, bytes, err, &op_status)) {
         std::cerr << "READ ERROR: " << err << "\n";
-        if (IsDisconnectStatus(op_status) && ReopenDevice(h, err)) {
+        if (IsRecoverablePipeStatus(op_status) && ReopenDevice(h, err)) {
             std::cout << "Retrying read...\n";
-            if (!DoReadToFile(h, out_file, err, bytes, &op_status)) {
+            if (!DoReadTestPayload(h, out_file, bytes, err, &op_status)) {
                 std::cerr << "READ ERROR after reopen: " << err << "\n";
             } else {
-                std::cout << "READ OK after reopen: saved " << bytes
-                          << " bytes to " << out_file << "\n";
+                if (bytes == 0) {
+                    std::cout << "READ OK after reopen: no payload bytes "
+                              << "received, file not created.\n";
+                } else {
+                    std::cout << "READ OK after reopen: saved " << bytes
+                              << " bytes to " << out_file << "\n";
+                }
             }
-        } else if (IsDisconnectStatus(op_status)) {
+        } else if (IsRecoverablePipeStatus(op_status)) {
             std::cerr << "REOPEN ERROR: " << err << "\n";
         }
     } else {
-        std::cout << "READ OK: saved " << bytes << " bytes to "
-                  << out_file << "\n";
-    }
-}
-
-void HandleLoopbackTest(FT_HANDLE& h) {
-    std::string err;
-    FT_STATUS op_status = FT_OK;
-    const size_t word_count = ReadPayloadWordCount();
-
-    if (!DoLoopbackIntegrityTest(h, word_count, err, &op_status)) {
-        std::cerr << "LOOPBACK ERROR: " << err << "\n";
-        if (IsDisconnectStatus(op_status) && ReopenDevice(h, err)) {
-            std::cout << "Retrying loopback integrity test...\n";
-            if (!DoLoopbackIntegrityTest(h, word_count, err, &op_status)) {
-                std::cerr << "LOOPBACK ERROR after reopen: " << err << "\n";
-            }
-        } else if (IsDisconnectStatus(op_status)) {
-            std::cerr << "REOPEN ERROR: " << err << "\n";
+        if (bytes == 0) {
+            std::cout << "READ OK: no payload bytes received, file not created.\n";
+        } else {
+            std::cout << "READ OK: saved " << bytes << " bytes to "
+                      << out_file << "\n";
         }
     }
 }
 
 void HandleGetStatus(FT_HANDLE& h) {
+    ActionScope action("get_status");
     std::string err;
     FT_STATUS op_status = FT_OK;
 
@@ -126,20 +136,23 @@ void HandleGetStatus(FT_HANDLE& h) {
 }
 
 void HandleServiceCommand(FT_HANDLE& h, uint32_t opcode, const char* label) {
+    ActionScope action(label);
     std::string err;
     FT_STATUS op_status = FT_OK;
 
-    std::cout << "Sending " << label << " and requesting status...\n";
-    if (!DoCommandAndGetStatus(h, opcode, err, &op_status)) {
+    std::cout << "Sending " << label << "...\n";
+    if (!SendCommandFrame(h, opcode, err, &op_status)) {
         std::cerr << "COMMAND ERROR: " << err << "\n";
-        if (IsDisconnectStatus(op_status) && ReopenDevice(h, err)) {
+        if (IsRecoverablePipeStatus(op_status) && ReopenDevice(h, err)) {
             std::cout << "Retrying command...\n";
-            if (!DoCommandAndGetStatus(h, opcode, err, &op_status)) {
+            if (!SendCommandFrame(h, opcode, err, &op_status)) {
                 std::cerr << "COMMAND ERROR after reopen: " << err << "\n";
             }
-        } else if (IsDisconnectStatus(op_status)) {
+        } else if (IsRecoverablePipeStatus(op_status)) {
             std::cerr << "REOPEN ERROR: " << err << "\n";
         }
+    } else {
+        std::cout << "COMMAND OK. Use menu item 4 to read FPGA status.\n";
     }
 }
 
@@ -149,8 +162,14 @@ int main() {
     FT_HANDLE h = nullptr;
     std::string err;
 
+    if (!InitLogFile("log.txt")) {
+        std::cerr << "ERROR: cannot open log.txt\n";
+        return 1;
+    }
+
     if (!OpenDevice(h, err)) {
         std::cerr << "ERROR: " << err << "\n";
+        ShutdownLogFile();
         return 1;
     }
 
@@ -160,7 +179,7 @@ int main() {
 
     while (true) {
         const int choice = ReadMenuChoice();
-        if (choice == 10) {
+        if (choice == 8) {
             break;
         }
 
@@ -172,25 +191,19 @@ int main() {
                 HandleReadToFile(h);
                 break;
             case 3:
-                HandleLoopbackTest(h);
-                break;
-            case 4:
                 HandleGetStatus(h);
                 break;
-            case 5:
+            case 4:
                 HandleServiceCommand(h, CMD_SET_LOOPBACK, "SET_LOOPBACK");
                 break;
-            case 6:
+            case 5:
                 HandleServiceCommand(h, CMD_SET_NORMAL, "SET_NORMAL");
                 break;
+            case 6:
+                HandleServiceCommand(h, CMD_CLR_SERVICE_ERROR, "CLR_SERVICE_ERROR");
+                break;
             case 7:
-                HandleServiceCommand(h, CMD_CLR_TX_ERROR, "CLR_TX_ERROR");
-                break;
-            case 8:
-                HandleServiceCommand(h, CMD_CLR_RX_ERROR, "CLR_RX_ERROR");
-                break;
-            case 9:
-                HandleServiceCommand(h, CMD_CLR_ALL_ERROR, "CLR_ALL_ERROR");
+                HandleServiceCommand(h, CMD_FT601_RESET, "FT601_RESET");
                 break;
             default:
                 std::cout << "Unknown option.\n";
@@ -203,5 +216,6 @@ int main() {
     }
 
     std::cout << "Bye.\n";
+    ShutdownLogFile();
     return 0;
 }

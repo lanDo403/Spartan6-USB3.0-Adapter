@@ -61,7 +61,7 @@ module ft601_wrapper #(
 		.O(clk_o)
 	);
 
-	assign boundary_rst_n = ft601_reset_n_i && core_rst_n_i;
+	assign boundary_rst_n = core_rst_n_i;
 
 	OBUF #(
 		.IOSTANDARD("LVCMOS33"),
@@ -86,7 +86,7 @@ module ft601_wrapper #(
 		.O(rxf_n_ibuf)
 	);
 
-	always @(posedge clk_o or negedge boundary_rst_n) begin
+	always @(negedge clk_o or negedge boundary_rst_n) begin
 		if (!boundary_rst_n) begin
 			txe_n_ff <= 1'b1;
 			rxf_n_ff <= 1'b1;
@@ -100,7 +100,7 @@ module ft601_wrapper #(
 	assign txe_n_o = txe_n_ff;
 	assign rxf_n_o = rxf_n_ff;
 
-	always @(posedge clk_o or negedge boundary_rst_n) begin
+	always @(negedge clk_o or negedge boundary_rst_n) begin
 		if (!boundary_rst_n) begin
 			oe_n_o_ff <= 1'b1;
 			wr_n_o_ff <= 1'b1;
@@ -143,7 +143,7 @@ module ft601_wrapper #(
 		.O(RD_N)
 	);
 
-	always @(posedge clk_o or negedge boundary_rst_n) begin
+	always @(negedge clk_o or negedge boundary_rst_n) begin
 		if (!boundary_rst_n) begin
 			tx_data_o_ff <= {DATA_LEN{1'b0}};
 			tx_be_o_ff <= {BE_LEN{1'b0}};
@@ -191,7 +191,7 @@ module ft601_wrapper #(
 		end
 	endgenerate
 
-	always @(posedge clk_o or negedge boundary_rst_n) begin
+	always @(negedge clk_o or negedge boundary_rst_n) begin
 		if (!boundary_rst_n) begin
 			rx_data_o_ff <= {DATA_LEN{1'b0}};
 			rx_be_o_ff <= {BE_LEN{1'b0}};

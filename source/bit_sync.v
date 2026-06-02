@@ -12,7 +12,7 @@ module bit_sync #(
 	reg sync1_ff;
 	reg sync2_ff;
 
-	always @(posedge clk) begin
+	always @(negedge clk) begin
 		if (!rst_n) begin
 			sync1_ff <= RESET_VALUE;
 			sync2_ff <= RESET_VALUE;

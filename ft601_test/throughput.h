@@ -1,10 +1,12 @@
 #pragma once
 
-#include <chrono>
 #include <cstdint>
 #include <string>
+#include <windows.h>
 
-typedef std::chrono::steady_clock::time_point ThroughputTimePoint;
+struct ThroughputTimePoint {
+    LARGE_INTEGER value;
+};
 
 ThroughputTimePoint ThroughputNow();
 double ThroughputSeconds(ThroughputTimePoint start, ThroughputTimePoint end);

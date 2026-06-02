@@ -11,7 +11,7 @@ module rst_sync(
 
 	// Asynchronous assertion keeps startup/reset behavior reliable.
 	// Internal logic uses rst_n_o as an active-low synchronous reset in its own domain.
-	always @(posedge clk or posedge arst_i) begin
+	always @(negedge clk or posedge arst_i) begin
 		if (arst_i) begin
 			rst_ff1 <= 1'b0;
 			rst_ff2 <= 1'b0;

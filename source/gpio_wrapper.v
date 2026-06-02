@@ -54,7 +54,7 @@ module gpio_wrapper #(
 		.I(strob_i)      // Diff_p buffer input (connect directly to top-level port) 
 	);
 	
-	always @(posedge clk_buf) begin 
+	always @(negedge clk_buf) begin 
 		data_rx <= data_buf;
 		strob_rx <= strob_buf;
 	end

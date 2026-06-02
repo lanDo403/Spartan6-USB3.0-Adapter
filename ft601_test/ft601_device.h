@@ -13,6 +13,7 @@ constexpr DWORD DEVICE_INDEX = 0;
 
 std::string StatusToStr(FT_STATUS st);
 bool IsDisconnectStatus(FT_STATUS st);
+bool IsRecoverablePipeStatus(FT_STATUS st);
 void AbortPipeBestEffort(FT_HANDLE h, UCHAR pipe_id);
 
 bool OpenDevice(FT_HANDLE& h, std::string& err);

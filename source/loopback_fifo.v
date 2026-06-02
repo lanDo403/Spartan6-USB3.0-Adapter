@@ -7,7 +7,6 @@ module loopback_fifo #(
 )(
 	input                    clk,
 	input                    rst_n,
-	input                    clear_i,
 	input                    wen_i,
 	input                    ren_i,
 	input  [DATA_LEN-1:0]    data_i,
@@ -39,14 +38,8 @@ module loopback_fifo #(
 	                   (wr_ptr_next[ADDR_LEN-1:0] == rd_ptr_next[ADDR_LEN-1:0]);
 
 	// FIFO state: pointers and occupancy flags.
-	always @(posedge clk) begin
+	always @(negedge clk) begin
 		if (!rst_n) begin
-			wr_ptr_ff <= {ADDR_LEN+1{1'b0}};
-			rd_ptr_ff <= {ADDR_LEN+1{1'b0}};
-			full_ff <= 1'b0;
-			empty_ff <= 1'b1;
-		end
-		else if (clear_i) begin
 			wr_ptr_ff <= {ADDR_LEN+1{1'b0}};
 			rd_ptr_ff <= {ADDR_LEN+1{1'b0}};
 			full_ff <= 1'b0;
@@ -61,11 +54,8 @@ module loopback_fifo #(
 	end
 
 	// Datapath: synchronous write into memory and synchronous read into the output register.
-	always @(posedge clk) begin
+	always @(negedge clk) begin
 		if (!rst_n) begin
-			data_ff <= {DATA_LEN{1'b0}};
-		end
-		else if (clear_i) begin
 			data_ff <= {DATA_LEN{1'b0}};
 		end
 		else begin

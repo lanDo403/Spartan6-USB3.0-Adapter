@@ -2,46 +2,77 @@
 
 module packer8to32 #(
 	parameter DATA_LEN = 32,
-	parameter GPIO_LEN = 8
+	parameter GPIO_LEN = 8,
+	parameter BE_LEN = DATA_LEN / GPIO_LEN
 )
 (
 	input 						clk,
 	input 						rst_n,
 	input 						valid_i,
 	input  [GPIO_LEN-1:0] 	data_i,
-	output 						valid_o, 	// output valid signal to FIFO
-	output [DATA_LEN-1:0] 	data_o		// output data to FIFO
+	output 						valid_o,
+	output [DATA_LEN-1:0] 	data_o,
+	output [BE_LEN-1:0]    keep_o
     );
 
-	reg [23:0] data_ff;
-	reg [DATA_LEN-1:0] data_ff_o;
-	reg [1:0] 	byte_counter;
-	reg 			valid_byte;
+	localparam SHIFT_DATA_LEN = DATA_LEN - GPIO_LEN;
+	localparam SHIFT_KEEP_LEN = BE_LEN - 1;
+
+	reg [1:0] byte_counter;
+	reg [SHIFT_DATA_LEN-1:0] data_shift_ff;
+	reg [SHIFT_KEEP_LEN-1:0] keep_shift_ff;
+	reg [DATA_LEN-1:0] data_ff;
+	reg [BE_LEN-1:0] keep_ff;
+	reg valid_ff;
+
+	wire [GPIO_LEN-1:0] byte_w;
+	wire [DATA_LEN-1:0] data_next_w;
+	wire [BE_LEN-1:0] keep_next_w;
+	wire [SHIFT_DATA_LEN-1:0] data_shift_next_w;
+	wire [SHIFT_KEEP_LEN-1:0] keep_shift_next_w;
+
+	assign byte_w = valid_i ? data_i : {GPIO_LEN{1'b0}};
+	assign data_next_w = {byte_w, data_shift_ff};
+	assign keep_next_w = {valid_i, keep_shift_ff};
+	assign data_shift_next_w = data_next_w[DATA_LEN-1:GPIO_LEN];
+	assign keep_shift_next_w = keep_next_w[BE_LEN-1:1];
 	
-	always @(posedge clk) begin
+	always @(negedge clk) begin
 		if (!rst_n) begin
-			byte_counter 	<= 2'd0;
-			valid_byte 		<= 1'b0;
-			data_ff 			<= 24'd0;
-			data_ff_o 	<= 32'd0;
+			byte_counter <= 2'd0;
+			data_shift_ff <= {SHIFT_DATA_LEN{1'b0}};
+			keep_shift_ff <= {SHIFT_KEEP_LEN{1'b0}};
+			data_ff <= {DATA_LEN{1'b0}};
+			keep_ff <= {BE_LEN{1'b0}};
+			valid_ff <= 1'b0;
 		end
 		else begin
-			valid_byte <= 1'b0;
-			if (valid_i) begin
-				case (byte_counter)
-					2'd0:	data_ff[7:0] 	<= data_i;
-					2'd1:	data_ff[15:8] 	<= data_i;
-					2'd2:	data_ff[23:16] <= data_i;
-					2'd3:	begin
-						data_ff_o <= {data_i, data_ff};
-						valid_byte <= 1'b1;
-					end
-				endcase
-				byte_counter <= (byte_counter == 2'd3) ? 2'd0 : byte_counter + 1'b1;
+			valid_ff <= 1'b0;
+
+			if (byte_counter == 2'd0) begin
+				if (valid_i) begin
+					data_shift_ff <= {data_i, {(SHIFT_DATA_LEN-GPIO_LEN){1'b0}}};
+					keep_shift_ff <= {1'b1, {(SHIFT_KEEP_LEN-1){1'b0}}};
+					byte_counter <= 2'd1;
+				end
+			end
+			else if (byte_counter == 2'd3) begin
+				data_ff <= data_next_w;
+				keep_ff <= keep_next_w;
+				valid_ff <= |keep_next_w;
+				byte_counter <= 2'd0;
+				data_shift_ff <= {SHIFT_DATA_LEN{1'b0}};
+				keep_shift_ff <= {SHIFT_KEEP_LEN{1'b0}};
+			end
+			else begin
+				data_shift_ff <= data_shift_next_w;
+				keep_shift_ff <= keep_shift_next_w;
+				byte_counter <= byte_counter + 1'b1;
 			end
 		end
 	end
-	
-	assign valid_o = valid_byte;
-	assign data_o 	= data_ff_o;
+
+	assign valid_o = valid_ff;
+	assign data_o 	= data_ff;
+	assign keep_o = keep_ff;
 endmodule

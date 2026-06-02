@@ -6,7 +6,11 @@
 
 Утилита разделяет два типа операций:
 - `raw payload` через `EP02` (`0x02`) и `EP82` (`0x82`);
-- `service protocol` для управления текущей RTL-прошивкой FPGA и чтения статуса.
+- `service protocol` для управления RTL-прошивкой FPGA и чтения статуса.
+
+Структурная схема программы:
+
+![Структурная схема программы](../images/3.png)
 
 При старте программа:
 - открывает устройство по `DEVICE_INDEX = 0`;
@@ -19,10 +23,11 @@
 ## Структура исходников
 
 - `main.cpp` — меню, dispatch операций и retry/reopen flow.
+- `app_log.h/.cpp` — запись системных сообщений в `log.txt` без логирования отрисовки меню. Каждая выбранная операция дополнительно получает timestamp-маркер начала и конца, чтобы сопоставлять лог с ChipScope-захватами.
 - `ft601_device.h/.cpp` — открытие устройства, pipe discovery, raw D3XX read/write, reopen и pipe abort.
 - `service_protocol.h/.cpp` — framed service protocol, opcodes, status frame и декодирование `status_word`.
-- `payload_test.h/.cpp` — deterministic payload, raw test write и loopback integrity compare.
-- `throughput.h/.cpp` — прикладной расчет скорости для payload-операций.
+- `payload_test.h/.cpp` — raw test write и потоковое чтение payload.
+- `throughput.h/.cpp` — прикладной расчет скорости через `QueryPerformanceCounter`.
 
 ## Service protocol
 
@@ -35,62 +40,57 @@
 2. `status_word`
 
 Поддерживаемые `opcode`:
-- `CMD_CLR_TX_ERROR = 0x00000001`
-- `CMD_CLR_RX_ERROR = 0x00000002`
-- `CMD_CLR_ALL_ERROR = 0x00000003`
+- `CMD_CLR_SERVICE_ERROR = 0x00000001`
 - `CMD_SET_LOOPBACK = 0xA5A50004`
 - `CMD_SET_NORMAL = 0xA5A50005`
 - `CMD_GET_STATUS = 0xA5A50006`
+- `CMD_FT601_RESET = 0xA5A50007`
 
 Формат `status_word`:
 - `bit[0]` — `loopback_mode`
-- `bit[1]` — `tx_error`
-- `bit[2]` — `rx_error`
-- `bit[3]` — `tx_fifo_empty`
-- `bit[4]` — `tx_fifo_full`
-- `bit[5]` — `loopback_fifo_empty`
-- `bit[6]` — `loopback_fifo_full`
-- `bit[31:7]` — `0`
+- `bit[1]` — `service_frame_error`
+- `bit[2]` — `tx_fifo_empty`
+- `bit[3]` — `tx_fifo_full`
+- `bit[4]` — `loopback_fifo_empty`
+- `bit[5]` — `loopback_fifo_full`
+- `bit[31:6]` — `0`
 
-Service-команды выполняются в stop-and-wait режиме. Для `SET_*` и `CLR_*` утилита сразу делает `GET_STATUS` как подтверждение.
+Service-команды выполняются в stop-and-wait режиме. `SET_*`, `CLR_*` и `CMD_FT601_RESET` только отправляют команду; статус читается отдельно через пункт `Get FPGA status`.
+
+`ReadStatusFrame` читает `EP82` до появления корректной пары `STATUS_MAGIC + status_word`. Если перед status frame в endpoint остались старые payload-слова, программа пропускает их с предупреждением. Поиск ограничен, чтобы ошибка протокола не превращалась в бесконечное ожидание.
 
 ## Меню
 
-1. `Write test payload` — отправляет `64` 32-битных слова `1..64` в `EP02` и печатает скорость записи.
-2. `Read payload to file` — читает raw payload из `EP82` до timeout/пустого чтения, сохраняет в `rx_dump.bin` и печатает скорость по фактически принятым байтам.
-3. `Loopback integrity test` — включает loopback, пишет deterministic payload, читает ровно тот же размер, сравнивает данные и печатает write/read/round-trip throughput.
-4. `Get FPGA status` — отправляет `CMD_GET_STATUS` и печатает `status_word`.
-5. `Set loopback mode` — отправляет `CMD_SET_LOOPBACK`, затем автоматически читает статус.
-6. `Set normal mode` — отправляет `CMD_SET_NORMAL`, затем автоматически читает статус.
-7. `Clear TX error` — отправляет `CMD_CLR_TX_ERROR`, затем автоматически читает статус.
-8. `Clear RX error` — отправляет `CMD_CLR_RX_ERROR`, затем автоматически читает статус.
-9. `Clear all errors` — отправляет `CMD_CLR_ALL_ERROR`, затем автоматически читает статус.
-10. `Exit`
+1. `Write test payload` — отправляет `64` значения счетчика в `EP02`, печатает скорость записи и сохраняет `*_raw_tx.bin`. Каждое значение записывается четырьмя байтами: `00 00 00 01`, `00 00 00 02` и далее.
+2. `Read payload to file` — включает потоковое чтение `EP82`, читает данные чанками по `256 KiB`, сохраняет timestamped `*_raw_rx.bin` и примерно раз в секунду печатает скорость чтения из отдельного stats-потока. Чтение идет до нажатия `q`; если payload-байтов не было, RX-файл не создается.
+3. `Get FPGA status` — отправляет `CMD_GET_STATUS` и печатает `status_word`.
+4. `Set loopback mode` — отправляет `CMD_SET_LOOPBACK`.
+5. `Set normal mode` — отправляет `CMD_SET_NORMAL`.
+6. `Clear service frame error` — отправляет `CMD_CLR_SERVICE_ERROR`.
+7. `Reset FT601` — отправляет `CMD_FT601_RESET`, который формирует `RESET_N=0` на два такта `CLK` FT601.
+8. `Exit`
 
 Важно:
-- `Read payload to file` — это raw dump, а не чтение статуса;
-- status frame читается только через `Get FPGA status` или автоматический `GET_STATUS` после service-команды;
-- `Loopback integrity test` по умолчанию использует `1024` слова, максимум `1048576` слов.
+- `Write test payload` только пишет raw-поток в `EP02`; в `normal mode` это не является echo-тестом, потому что normal TX path идет от внешнего GPIO-источника;
+- `Read payload to file` — это потоковое payload-чтение до `q`, а не чтение статуса; внутри используется `FT_SetStreamPipe`, короткий timeout для проверки клавиши остановки, `FT_ClearStreamPipe` после остановки и возврат обычного timeout для коротких status-read операций;
+- status frame читается только через `Get FPGA status`.
 
-## Loopback integrity test
+## Ручная loopback-проверка
 
-Сценарий проверки:
-1. `CMD_SET_LOOPBACK`.
-2. `CMD_GET_STATUS` и проверка `loopback_mode = 1`.
-3. Генерация deterministic payload.
-4. Запись payload в `EP02`.
-5. Чтение ровно такого же количества слов из `EP82`.
-6. Сравнение `tx payload` и `rx payload`.
+1. Включить loopback через `Set loopback mode`.
+2. Проверить режим через `Get FPGA status`.
+3. Запустить `Write test payload`.
+4. Запустить `Read payload to file` и остановить чтение клавишей `q`, когда данные получены.
 
-При mismatch печатается первый word index, byte offset, expected и actual value.
+`Write test payload` сохраняет отправленный файл `*_raw_tx.bin`. `Read payload to file` сохраняет принятый файл `*_raw_rx.bin`. Автоматическое сравнение TX/RX в отдельном пункте меню больше не выполняется.
 
 ## Throughput
 
 Скорость считается только для payload-операций. Service-команды и status frame слишком маленькие, поэтому программа не использует их как benchmark.
 
-`Write test payload` показывает host-to-device скорость. `Read payload to file` показывает device-to-host скорость по байтам, которые реально попали в `rx_dump.bin`. `Loopback integrity test` отдельно печатает скорость записи, скорость чтения и суммарный round-trip throughput.
+`Write test payload` показывает host-to-device скорость. `Read payload to file` показывает device-to-host скорость примерно раз в секунду по счетчику принятых байтов и итоговую скорость для фактически принятого dump.
 
-Это прикладная оценка для текущего blocking D3XX flow, а не точный USB benchmark. На маленьких payload результат будет шумным, потому что накладные расходы Windows, D3XX и консольного приложения сравнимы с самой передачей. Если чтение завершилось timeout без payload-байтов, скорость не считается.
+Это прикладная оценка для blocking D3XX flow, а не точный USB benchmark. Расчет времени сделан через `QueryPerformanceCounter`; выводятся `MiB/s` и `Mib/s`. На маленьких payload результат будет шумным, потому что накладные расходы Windows, D3XX и консольного приложения сравнимы с самой передачей. Если потоковое чтение остановлено без payload-байтов, файл не создается и скорость не считается.
 
 ## Требования
 
@@ -108,7 +108,7 @@ Service-команды выполняются в stop-and-wait режиме. Д�
 
 ```powershell
 cd .\ft601_test
-g++ -std=c++11 -Wall -Wextra -pedantic main.cpp ft601_device.cpp service_protocol.cpp payload_test.cpp throughput.cpp -I. -L.\WU_FTD3XXLib\Lib\Dynamic\x64 -lFTD3XXWU -o main_gpp.exe
+g++ -std=c++11 -Wall -Wextra -pedantic main.cpp app_log.cpp ft601_device.cpp service_protocol.cpp payload_test.cpp throughput.cpp -I. -L.\WU_FTD3XXLib\Lib\Dynamic\x64 -lFTD3XXWU -o main_gpp.exe
 ```
 
 ## Запуск
@@ -121,7 +121,7 @@ cd .\ft601_test
 ## Обработка ошибок
 
 - При ошибке записи выполняется `FT_AbortPipe(0x02)`.
-- При ошибке чтения, timeout или protocol error выполняется `FT_AbortPipe(0x82)`.
-- При disconnect-статусах (`FT_DEVICE_NOT_CONNECTED`, `FT_DEVICE_NOT_FOUND`, `FT_INVALID_HANDLE`) утилита делает попытку reopen и повторяет операцию один раз.
-- Если первым словом status frame пришел не `STATUS_MAGIC`, это protocol error.
-- Физический `RESET_N` FT601 не управляется этой программой; он связан с `FPGA_RESET` в RTL.
+- При ошибке чтения или protocol error выполняется `FT_AbortPipe(0x82)`.
+- При disconnect-статусах (`FT_DEVICE_NOT_CONNECTED`, `FT_DEVICE_NOT_FOUND`, `FT_INVALID_HANDLE`) и `FT_OTHER_ERROR` утилита делает попытку reopen и повторяет операцию один раз.
+- Если `STATUS_MAGIC` не найден в ограниченном окне поиска или следующее слово не похоже на `status_word`, это protocol error.
+- `CMD_FT601_RESET` управляет только внешним `RESET_N` FT601. Он не сбрасывает RTL-логику ПЛИС, FIFO, режим или диагностические флаги.
