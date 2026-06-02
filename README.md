@@ -20,21 +20,19 @@
 
 В `normal mode` полезные данные идут по цепочке:
 
-```text
-GPIO -> gpio_wrapper -> packer8to32 -> axis_fifo_write_adapter -> async_fifo -> axis_fifo_read_adapter -> axis_tx_arbiter -> ft601_tx_adapter -> ft601_wrapper -> FT601 -> PC
-```
+![Normal тракт](images/2_1.png)
 
 GPIO-домен и FT601-домен разделены асинхронным FIFO. GPIO-интерфейс остается односторонним: внешнего `ready` назад к GPIO-источнику нет. Граница stream-тракта начинается внутри СФ-блока после упаковки байтов. `packer8to32` собирает четыре позиции GPIO в `data[31:0]`, а `keep[3:0]` формирует из `GPIO_STROB`; этот `keep` затем идет как `BE[3:0]`. Write-side adapter пишет упакованные слова в FIFO, а read-side adapter выдает стабильный `valid/ready/data/keep` поток в TX arbiter. В `normal mode` FT601 RX path используется для служебных команд.
 
 В `loopback mode` источник данных меняется:
 
-```text
-PC -> FT601 -> ft601_rx_adapter -> rx_stream_router -> axis_fifo_write_adapter -> loopback_fifo -> axis_fifo_read_adapter -> axis_tx_arbiter -> ft601_tx_adapter -> FT601 -> PC
-```
+![Loopback тракт](images/2_2.png)
 
 Loopback FIFO хранит не только `DATA[31:0]`, но и `BE[3:0]`, поэтому payload возвращается с тем же byte-enable mask. Service frame при этом не попадает в payload.
 
 Третий поток - status response. Он формируется внутри FPGA по команде `CMD_GET_STATUS` и имеет приоритет над normal/loopback payload. Это важно: `STATUS_MAGIC` и `status_word` должны выйти подряд, без вклинивания пользовательских данных.
+
+![Service/control тракт](images/2_3.png)
 
 Если status запрошен рядом с активным payload-потоком, RTL останавливает дальнейшее чтение payload FIFO на время service-read фазы. Payload снова разрешается только после того, как FT601 деактивирует `TXE_N`, то есть host-side чтение status frame завершилось. Уже лежащие в USB endpoint старые payload-слова не исчезают, поэтому `ft601_test` при чтении статуса ищет `STATUS_MAGIC` с ограниченным пропуском stale-слов.
 
