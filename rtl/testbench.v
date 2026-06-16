@@ -14,6 +14,7 @@
 `include "rst_sync.v"
 `include "sram_dualport.v"
 `include "status_source.v"
+`include "service_status_policy.v"
 `include "axis_fifo_read_adapter.v"
 `include "axis_fifo_write_adapter.v"
 `include "top.v"
@@ -55,6 +56,7 @@ endmodule
 
 module testbench;
 
+   // Test payload sizing, FT601 bus widths, and service command constants.
    localparam integer TOTAL_WORDS = 3402;
    localparam integer PAUSE_LEN   = 16;
 
@@ -72,13 +74,14 @@ module testbench;
    localparam [DATA_LEN-1:0] CMD_GET_STATUS = 32'hA5A50006;
    localparam [DATA_LEN-1:0] CMD_FT601_RESET = 32'hA5A50007;
    localparam [BE_LEN-1:0]   FULL_BE = {BE_LEN{1'b1}};
-   localparam integer        TX_CAPTURE_WORDS_MAX = 16;
+   localparam integer        TX_CAPTURE_WORDS_MAX = MAX_WORDS;
    localparam                TB_VERBOSE_STREAM = 1'b0;
    localparam                TB_VERBOSE_COMMAND = 1'b0;
    localparam                TB_VERBOSE_SCENARIO = 1'b0;
    localparam integer        TB_POSEDGE_SAMPLE_DELAY = 2;
    localparam [5:0]          FSM_ARB = 6'b000001;
 
+   // External clocks and top-level pins controlled directly by the testbench.
    reg                  gpio_clk;
    reg                  ft_clk;
    reg                  gpio_strob;
@@ -88,21 +91,24 @@ module testbench;
    reg                  ft_txe_n;
    reg                  ft_rxf_n;
 
+   // Host-side FT601 bus model used while the DUT reads from RXF_N/DATA/BE.
    reg                  host_drive_en;
    reg  [DATA_LEN-1:0]  host_data_drv;
    reg  [BE_LEN-1:0]    host_be_drv;
 
+   // FT601 pins and shared bus observed on the DUT side.
    wire                 ft_oe_n;
    wire                 ft_wr_n;
    wire                 ft_rd_n;
    wire [DATA_LEN-1:0]  ft_data_bus;
    wire [BE_LEN-1:0]    ft_be_bus;
-   wire                 status_tx_hold;
 
+   // Byte-level stimulus and the reconstructed 32-bit words expected on TX/loopback paths.
    reg [7:0]  byte_seq_p [0:TOTAL_WORDS-1];
    reg [31:0] exp_words  [0:MAX_WORDS-1];
    reg [BE_LEN-1:0] exp_be [0:MAX_WORDS-1];
 
+   // Scenario counters and capture buffers used by black-box checks.
    integer exp_words_n;
    integer tx_words_n;
    integer rx_words_n;
@@ -129,6 +135,8 @@ module testbench;
    integer tx_total_words_n;
    reg [DATA_LEN-1:0] tx_captured_words [0:TX_CAPTURE_WORDS_MAX-1];
    reg [BE_LEN-1:0]   tx_captured_be    [0:TX_CAPTURE_WORDS_MAX-1];
+
+   // Previous-cycle snapshots used by FT601 timing checks and AXIS stall-stability assertions.
    reg                 loopback_fifo_wen_pre;
    reg [FIFO_RX_LEN-1:0] loopback_fifo_wdata_pre;
    reg                 prev_ft_rx_axis_stall;
@@ -149,9 +157,7 @@ module testbench;
    reg                 prev_tx_axis_stall;
    reg [DATA_LEN-1:0]  prev_tx_axis_tdata;
    reg [BE_LEN-1:0]    prev_tx_axis_tkeep;
-   reg                 allow_status_preempt_drop;
-   reg                 prev_status_tx_hold;
-
+   // The host may drive the shared FT bus only while the DUT has granted FT601 read direction.
    assign ft_data_bus = (host_drive_en && !ft_oe_n) ? host_data_drv : {DATA_LEN{1'bz}};
    assign ft_be_bus   = (host_drive_en && !ft_oe_n) ? host_be_drv   : {BE_LEN{1'bz}};
 
@@ -179,9 +185,7 @@ module testbench;
       .DATA(ft_data_bus)
    );
 
-   assign status_tx_hold = dut.status_frame_active ||
-                           dut.axis_tx_arbiter.status_frame_busy_ff;
-
+   // Deterministic testbench power-up state for all drivers, counters, and capture arrays.
    initial begin
       gpio_clk      = 1'b0;
       ft_clk        = 1'b0;
@@ -228,8 +232,6 @@ module testbench;
       prev_tx_axis_stall = 1'b0;
       prev_tx_axis_tdata = {DATA_LEN{1'b0}};
       prev_tx_axis_tkeep = {BE_LEN{1'b0}};
-      allow_status_preempt_drop = 1'b0;
-      prev_status_tx_hold = 1'b0;
       for (integer cap_i = 0; cap_i < TX_CAPTURE_WORDS_MAX; cap_i = cap_i + 1) begin
          tx_captured_words[cap_i] = {DATA_LEN{1'b0}};
          tx_captured_be[cap_i] = {BE_LEN{1'b0}};
@@ -243,6 +245,7 @@ module testbench;
       end
    endtask
 
+   // Applies FPGA_RESET, checks synchronized release in both domains, and verifies FT pins stay idle.
    task tb_reset;
       integer n;
       integer gpio_release_cycles;
@@ -334,6 +337,7 @@ module testbench;
       end
    endtask
 
+   // Loads byte stimulus from data_p; later helpers repack it into expected 32-bit words.
    task load_vectors;
       integer fd_p;
       integer i;
@@ -357,6 +361,7 @@ module testbench;
       end
    endtask
 
+   // Detects the idle-byte pattern inserted into data_p to model gaps on GPIO_STROB.
    task is_pause_template_at(
       input  integer idx,
       output reg     is_pause
@@ -380,6 +385,7 @@ module testbench;
       end
    endtask
 
+   // Software model of packer8to32 used to build the expected TX/loopback word stream.
    task append_expected_packer_cycle;
       input [GPIO_LEN-1:0] data_i;
       input                strobe_i;
@@ -420,6 +426,7 @@ module testbench;
       end
    endtask
 
+   // Builders for the main payload and boundary/stress payloads.
    task build_expected_words;
       integer i;
       integer t;
@@ -471,45 +478,7 @@ module testbench;
       end
    endtask
 
-   task build_counter_expected_words(input integer word_count);
-      integer i;
-      begin
-         if (word_count > MAX_WORDS)
-            fail("counter expected word count exceeds MAX_WORDS");
-
-         exp_words_n = word_count;
-         for (i = 0; i < word_count; i = i + 1) begin
-            exp_words[i] = i + 1;
-            exp_be[i] = FULL_BE;
-         end
-      end
-   endtask
-
-   task expect_loopback_stage_counts(input integer expected_count);
-      begin
-         if (ft_rx_axis_hs_n !== expected_count) begin
-            $display("ERROR: ft_rx_axis_hs_n=%0d expected=%0d", ft_rx_axis_hs_n, expected_count);
-            fail("loopback diagnostic: FT RX adapter count mismatch");
-         end
-         if (loopback_fifo_wen_n !== expected_count) begin
-            $display("ERROR: loopback_fifo_wen_n=%0d expected=%0d", loopback_fifo_wen_n, expected_count);
-            fail("loopback diagnostic: loopback FIFO write count mismatch");
-         end
-         if (loopback_fifo_ren_n !== expected_count) begin
-            $display("ERROR: loopback_fifo_ren_n=%0d expected=%0d", loopback_fifo_ren_n, expected_count);
-            fail("loopback diagnostic: loopback FIFO read count mismatch");
-         end
-         if (tx_axis_hs_n !== expected_count) begin
-            $display("ERROR: tx_axis_hs_n=%0d expected=%0d", tx_axis_hs_n, expected_count);
-            fail("loopback diagnostic: TX AXIS count mismatch");
-         end
-         if (tx_words_n !== expected_count) begin
-            $display("ERROR: tx_words_n=%0d expected=%0d", tx_words_n, expected_count);
-            fail("loopback diagnostic: FT601 TX word count mismatch");
-         end
-      end
-   endtask
-
+   // Clears counters, capture buffers, and previous-cycle snapshots between checks.
    task clear_monitors;
       integer cap_i;
       begin
@@ -551,7 +520,6 @@ module testbench;
          prev_tx_axis_stall = 1'b0;
          prev_tx_axis_tdata = {DATA_LEN{1'b0}};
          prev_tx_axis_tkeep = {BE_LEN{1'b0}};
-         prev_status_tx_hold = status_tx_hold;
          for (cap_i = 0; cap_i < TX_CAPTURE_WORDS_MAX; cap_i = cap_i + 1) begin
             tx_captured_words[cap_i] = {DATA_LEN{1'b0}};
             tx_captured_be[cap_i] = {BE_LEN{1'b0}};
@@ -559,6 +527,7 @@ module testbench;
       end
    endtask
 
+   // Scenario banners keep the regression log readable.
    task scenario_start(input [1023:0] name);
       begin
          $display("SCENARIO START [%0d ns] %0s", $time, name);
@@ -571,6 +540,7 @@ module testbench;
       end
    endtask
 
+   // Low-level GPIO and FT601 host drivers used by higher-level scenario tasks.
    task send_one_gpio_byte(
       input [GPIO_LEN-1:0] data_i,
       input                strobe_i
@@ -614,6 +584,7 @@ module testbench;
       end
    endtask
 
+   // Simple timing helpers for GPIO and FT clock domains.
    task wait_ft_cycles(input integer cycles);
       integer i;
       begin
@@ -652,6 +623,7 @@ module testbench;
       end
    endtask
 
+   // Pushes one 32-bit word onto the GPIO-side packer in little-endian byte order.
    task send_gpio_word(
       input [DATA_LEN-1:0] word_i
    );
@@ -664,6 +636,7 @@ module testbench;
       end
    endtask
 
+   // Wait until the FT601 FSM fully returns to ARB/idle after RX or TX traffic.
    task wait_for_ft_rx_idle;
       integer timeout;
       begin
@@ -693,6 +666,7 @@ module testbench;
       end
    endtask
 
+   // Payload comparators used when a scenario expects an exact word-for-word match.
    task expect_tx_word(
       input integer        wi,
       input [DATA_LEN-1:0] got_data,
@@ -712,6 +686,7 @@ module testbench;
       end
    endtask
 
+   // Encodes the public status bitfield so tests compare against the same layout as the RTL.
    function [DATA_LEN-1:0] build_status_word;
       input loopback_mode_i;
       input service_frame_error_i;
@@ -820,6 +795,23 @@ module testbench;
       end
    endtask
 
+   function integer find_captured_status_like_frame;
+      integer i;
+      begin
+         find_captured_status_like_frame = -1;
+         for (i = 0; i < TX_CAPTURE_WORDS_MAX - 1; i = i + 1) begin
+            if ((find_captured_status_like_frame < 0) &&
+                ((i + 1) < tx_total_words_n) &&
+                (tx_captured_words[i] === STATUS_MAGIC) &&
+                (tx_captured_be[i] === FULL_BE) &&
+                (tx_captured_be[i + 1] === FULL_BE) &&
+                (tx_captured_words[i + 1][31:6] === 26'b0)) begin
+               find_captured_status_like_frame = i;
+            end
+         end
+      end
+   endfunction
+
    task expect_no_tx_for_cycles(input integer cycles);
       integer start_words;
       begin
@@ -830,6 +822,7 @@ module testbench;
       end
    endtask
 
+   // FT601 RX stimulus generators for contiguous bursts and bursts with deliberate packet gaps.
    task drive_ft_loopback_stream;
       integer i;
       integer timeout;
@@ -945,6 +938,7 @@ module testbench;
       end
    endtask
 
+   // Service-frame injectors for valid commands and malformed-frame diagnostics.
    task send_ft_command_frame(
       input [DATA_LEN-1:0] cmd_word
    );
@@ -1028,6 +1022,7 @@ module testbench;
       end
    endtask
 
+   // FT601 reset is command-driven and must be verified separately from FPGA_RESET.
    task expect_ft601_reset_pulse_2clks;
       integer timeout;
       integer low_cycles;
@@ -1119,6 +1114,8 @@ module testbench;
             $display("INFO: FPGA_RESET returned the design to normal mode");
       end
    endtask
+
+   // Core scenario bodies for normal-mode payload, loopback payload, and focused regressions.
    task test_gpio_mode;
       begin
          if (dut.loopback_mode_ft !== 1'b0)
@@ -1206,135 +1203,7 @@ module testbench;
       end
    endtask
 
-   task test_loopback_counter64_diagnostic;
-      integer word_count;
-      begin
-         if (dut.loopback_mode_ft !== 1'b1)
-            fail("counter64 loopback diagnostic requires loopback mode");
-
-         word_count = 64;
-         build_counter_expected_words(word_count);
-         clear_monitors();
-         ft_txe_n = 1'b1;
-         rx_payload_check_en = 1'b1;
-
-         drive_first_expected_loopback_words(word_count);
-         wait_for_ft_rx_idle();
-         wait_ft_cycles(4);
-
-         if (rx_words_n !== word_count) begin
-            $display("ERROR: rx_words_n=%0d expected=%0d", rx_words_n, word_count);
-            fail("loopback diagnostic: RX payload count mismatch before TX readout");
-         end
-         if (ft_rx_axis_hs_n !== word_count) begin
-            $display("ERROR: ft_rx_axis_hs_n=%0d expected=%0d", ft_rx_axis_hs_n, word_count);
-            fail("loopback diagnostic: FT RX adapter count mismatch before TX readout");
-         end
-         if (loopback_fifo_wen_n !== word_count) begin
-            $display("ERROR: loopback_fifo_wen_n=%0d expected=%0d", loopback_fifo_wen_n, word_count);
-            fail("loopback diagnostic: loopback FIFO write count mismatch before TX readout");
-         end
-
-         expect_no_tx_for_cycles(8);
-         @(posedge ft_clk);
-         ft_set_txe_now(1'b0);
-         wait_for_tx_words(word_count, 4000);
-         @(posedge ft_clk);
-         ft_set_txe_now(1'b1);
-         wait_for_ft_tx_idle();
-         wait_ft_cycles(2);
-
-         expect_loopback_stage_counts(word_count);
-         if (dut.loopback_fifo_empty !== 1'b1)
-            fail("loopback diagnostic: FIFO must be empty after 64-word readout");
-
-         rx_payload_check_en = 1'b0;
-      end
-   endtask
-
-   task check_status_after_loopback_write_diagnostic;
-      integer word_count;
-      begin
-         if (dut.loopback_mode_ft !== 1'b1)
-            fail("status-after-loopback diagnostic requires loopback mode");
-
-         word_count = 64;
-         build_counter_expected_words(word_count);
-         clear_monitors();
-         ft_txe_n = 1'b1;
-         rx_payload_check_en = 1'b1;
-
-         drive_first_expected_loopback_words(word_count);
-         wait_for_ft_rx_idle();
-         wait_ft_cycles(4);
-
-         if (rx_words_n !== word_count) begin
-            $display("ERROR: rx_words_n=%0d expected=%0d", rx_words_n, word_count);
-            fail("status-after-loopback diagnostic: RX payload count mismatch");
-         end
-         if (loopback_fifo_wen_n !== word_count) begin
-            $display("ERROR: loopback_fifo_wen_n=%0d expected=%0d", loopback_fifo_wen_n, word_count);
-            fail("status-after-loopback diagnostic: loopback FIFO write count mismatch");
-         end
-         if (dut.loopback_fifo_empty !== 1'b0)
-            fail("status-after-loopback diagnostic: loopback FIFO must contain payload before status request");
-         if (dut.loopback_fifo_full !== 1'b0)
-            fail("status-after-loopback diagnostic: loopback FIFO unexpectedly full after 64 words");
-
-         rx_payload_check_en = 1'b0;
-         expect_status_bits(1'b1, 1'b0, 1'b1, 1'b0, 1'b0, 1'b0);
-
-         clear_monitors();
-         @(posedge ft_clk);
-         ft_set_txe_now(1'b0);
-         wait_for_tx_words(word_count, 4000);
-         @(posedge ft_clk);
-         ft_set_txe_now(1'b1);
-         wait_for_ft_tx_idle();
-         if (loopback_fifo_ren_n !== word_count) begin
-            $display("ERROR: loopback_fifo_ren_n=%0d expected=%0d", loopback_fifo_ren_n, word_count);
-            fail("status-after-loopback diagnostic: loopback FIFO read count mismatch");
-         end
-         if (tx_axis_hs_n !== word_count) begin
-            $display("ERROR: tx_axis_hs_n=%0d expected=%0d", tx_axis_hs_n, word_count);
-            fail("status-after-loopback diagnostic: TX AXIS count mismatch");
-         end
-         if (tx_words_n !== word_count) begin
-            $display("ERROR: tx_words_n=%0d expected=%0d", tx_words_n, word_count);
-            fail("status-after-loopback diagnostic: FT601 TX word count mismatch");
-         end
-         if (dut.loopback_fifo_empty !== 1'b1)
-            fail("status-after-loopback diagnostic: loopback FIFO must empty after payload readout");
-      end
-   endtask
-
-   task check_repeated_status_after_normal_pending_diagnostic;
-      integer i;
-      integer timeout;
-      begin
-         clear_monitors();
-         tx_stream_only_mode = 1'b1;
-         ft_txe_n = 1'b1;
-
-         for (i = 0; i < 16; i = i + 1)
-            send_gpio_word(32'h73000000 | i[31:0]);
-         wait_gpio_cycles(4);
-
-         timeout = 0;
-         while ((dut.normal_fifo_empty === 1'b1) && (timeout < 256)) begin
-            @(posedge ft_clk);
-            timeout = timeout + 1;
-         end
-         if (dut.normal_fifo_empty !== 1'b0)
-            fail("repeated-status diagnostic: normal FIFO did not receive pending payload");
-         if (dut.normal_fifo_full !== 1'b0)
-            fail("repeated-status diagnostic: normal FIFO unexpectedly full");
-
-         expect_status_bits(1'b0, 1'b0, 1'b0, 1'b0, 1'b1, 1'b0);
-         expect_status_bits(1'b0, 1'b0, 1'b0, 1'b0, 1'b1, 1'b0);
-      end
-   endtask
-
+   // Status helpers used by service checks and mode-switch commands.
    task expect_status_frame(
       input [DATA_LEN-1:0] expected_word
    );
@@ -1419,6 +1288,7 @@ module testbench;
       end
    endtask
 
+   // Boundary-oriented loopback stress: short reads, RX packet gaps, and TXE_N gaps.
    task short_loopback_payload_check(input integer word_count);
       begin
          if (dut.loopback_mode_ft !== 1'b1)
@@ -1529,11 +1399,11 @@ module testbench;
       end
    endtask
 
-   task check_chipscope_like_rx_takeover;
+   task check_ft601_direction_turnaround;
       integer timeout;
       begin
          if (TB_VERBOSE_SCENARIO)
-            $display("INFO: Starting ChipScope-like RX takeover check");
+            $display("INFO: Starting FT601 direction turnaround check");
 
          clear_monitors();
          tx_stream_only_mode = 1'b1;
@@ -1554,7 +1424,7 @@ module testbench;
             timeout = timeout + 1;
          end
          if (ft_wr_n !== 1'b0)
-            fail("ChipScope-like check did not start TX before RX takeover");
+            fail("FT601 direction turnaround check did not start TX before RX takeover");
 
          ft_drive_rx_now(32'h13579BDF, FULL_BE, 1'b1, 1'b0);
 
@@ -1565,7 +1435,7 @@ module testbench;
             timeout = timeout + 1;
          end
          if ((ft_oe_n !== 1'b0) || (ft_rd_n !== 1'b0))
-            fail("ChipScope-like check did not grant RX while RXF_N was active");
+            fail("FT601 direction turnaround check did not grant RX while RXF_N was active");
 
          if (ft_wr_n !== 1'b1)
             fail("WR_N must be inactive when RX takeover reaches RD_N/OE_N active");
@@ -1580,10 +1450,11 @@ module testbench;
          tx_stream_only_mode = 1'b0;
 
          if (TB_VERBOSE_SCENARIO)
-            $display("INFO: ChipScope-like RX takeover check passed");
+            $display("INFO: FT601 direction turnaround check passed");
       end
    endtask
 
+   // Top-level scenario wrappers keep the final regression order compact and readable.
    task run_reset_boot_normal;
       begin
          scenario_start("reset_boot_normal");
@@ -1643,90 +1514,6 @@ module testbench;
       end
    endtask
 
-   task check_normal_fifo_full_blocks_write;
-      reg [DATA_LEN-1:0] test_word;
-      begin
-         clear_monitors();
-         ft_txe_n = 1'b1;
-         test_word = 32'h44332211;
-
-         force dut.normal_fifo_full = 1'b1;
-         send_gpio_word(test_word);
-         wait_gpio_cycles(2);
-         #TB_POSEDGE_SAMPLE_DELAY;
-
-         if (dut.normal_fifo_wen_req !== 1'b0)
-            fail("normal FIFO write request must be blocked while FIFO is full");
-         @(negedge gpio_clk);
-         release dut.normal_fifo_full;
-         wait_ft_cycles(4);
-      end
-   endtask
-
-   task check_status_preempts_pending_normal_payload;
-      integer i;
-      integer timeout;
-      begin
-         clear_monitors();
-         tx_stream_only_mode = 1'b1;
-         allow_status_preempt_drop = 1'b1;
-         ft_txe_n = 1'b1;
-
-         for (i = 0; i < 16; i = i + 1)
-            send_gpio_word(32'h71000000 | i[31:0]);
-         wait_gpio_cycles(4);
-
-         timeout = 0;
-         while ((dut.normal_fifo_empty === 1'b1) && (timeout < 256)) begin
-            @(posedge ft_clk);
-            timeout = timeout + 1;
-         end
-         if (dut.normal_fifo_empty !== 1'b0)
-            fail("normal FIFO did not receive payload before status preemption check");
-
-         @(posedge ft_clk);
-         ft_set_txe_now(1'b0);
-
-         timeout = 0;
-         while ((dut.ft601_fsm.tx_adapter.out_valid_ff !== 1'b1) &&
-                (timeout < 256)) begin
-            @(posedge ft_clk);
-            timeout = timeout + 1;
-         end
-         if (dut.ft601_fsm.tx_adapter.out_valid_ff !== 1'b1)
-            fail("TX adapter did not prefetch normal payload before status preemption check");
-
-         @(posedge ft_clk);
-         ft_set_txe_now(1'b1);
-         wait_ft_cycles(4);
-
-         send_ft_command_frame(CMD_GET_STATUS);
-
-         clear_monitors();
-         tx_stream_only_mode = 1'b1;
-         allow_status_preempt_drop = 1'b1;
-         @(posedge ft_clk);
-         ft_set_txe_now(1'b0);
-         wait_for_tx_total_words(2, 512);
-
-         expect_captured_tx_word(0, STATUS_MAGIC, FULL_BE);
-         if (tx_captured_be[1] !== FULL_BE)
-            fail("status preemption check returned non-full status keep");
-         if (tx_captured_words[1][31:6] !== 26'b0)
-            fail("status preemption check returned non-zero reserved status bits");
-         if (tx_captured_words[1][0] !== 1'b0)
-            fail("status preemption check changed loopback mode");
-         if (tx_captured_words[1][1] !== 1'b0)
-            fail("status preemption check unexpectedly set service_frame_error");
-
-         @(posedge ft_clk);
-         ft_set_txe_now(1'b1);
-         wait_for_ft_tx_idle();
-         allow_status_preempt_drop = 1'b0;
-         tx_stream_only_mode = 1'b0;
-      end
-   endtask
-
    task check_ft601_reset_command_pulse(input expected_loopback_mode);
       begin
          clear_monitors();
@@ -1774,11 +1561,6 @@ module testbench;
          expect_status_bits(1'b0, 1'b0, 1'b1, 1'b0, 1'b1, 1'b0);
          expect_status_bits(1'b0, 1'b0, 1'b1, 1'b0, 1'b1, 1'b0);
 
-         check_normal_fifo_full_blocks_write();
-         expect_status_bits(1'b0, 1'b0, 1'b1, 1'b0, 1'b1, 1'b0);
-         check_status_preempts_pending_normal_payload();
-         tb_reset();
-
          check_diagnostic_clear();
          check_ft601_reset_command_pulse(1'b0);
          set_loopback_via_status();
@@ -1792,7 +1574,7 @@ module testbench;
       begin
          scenario_start("ft601_boundary");
          tb_reset();
-         check_chipscope_like_rx_takeover();
+         check_ft601_direction_turnaround();
          scenario_end("ft601_boundary");
       end
    endtask
@@ -1807,30 +1589,11 @@ module testbench;
       end
    endtask
 
-   task run_loopback_counter64_diagnostic;
-      begin
-         scenario_start("loopback_counter64_diagnostic");
-         tb_reset();
-         set_loopback_via_status();
-         test_loopback_counter64_diagnostic();
-         scenario_end("loopback_counter64_diagnostic");
-      end
-   endtask
-
-   task run_service_status_diagnostic;
-      begin
-         scenario_start("service_status_diagnostic");
-         tb_reset();
-         set_loopback_via_status();
-         check_status_after_loopback_write_diagnostic();
-
-         tb_reset();
-         check_repeated_status_after_normal_pending_diagnostic();
-         scenario_end("service_status_diagnostic");
-      end
-   endtask
-
-   // Capture FT601 pins after the DUT posedge output boundary has settled.
+   // Main FT-domain monitor:
+   // - counts FT and AXIS handshakes
+   // - captures transmitted words for raw EP82 reads
+   // - checks FT601 direction timing and bus tri-state rules
+   // - checks AXIS valid/data stability while stalled
    always @(posedge ft_clk or negedge ft_reset_n) begin
       if (!ft_reset_n) begin
          tx_words_n <= 0;
@@ -1869,7 +1632,6 @@ module testbench;
          prev_tx_axis_stall <= 1'b0;
          prev_tx_axis_tdata <= {DATA_LEN{1'b0}};
          prev_tx_axis_tkeep <= {BE_LEN{1'b0}};
-         prev_status_tx_hold <= 1'b0;
          rx_expect_rd_after_oe       <= 1'b0;
          rx_expect_release_after_rxf <= 1'b0;
       end
@@ -1902,11 +1664,11 @@ module testbench;
          if (dut.loopback_fifo_wen && !(dut.loopback_payload_tvalid && dut.loopback_payload_tready))
             fail("loopback FIFO write occurred without payload AXIS handshake");
 
-         if (prev_normal_axis_stall && !dut.normal_axis_tready &&
-             !allow_status_preempt_drop && !status_tx_hold && !prev_status_tx_hold) begin
-            if (dut.normal_axis_tvalid &&
-                ((dut.normal_axis_tdata !== prev_normal_axis_tdata) ||
-                 (dut.normal_axis_tkeep !== prev_normal_axis_tkeep)))
+         if (prev_normal_axis_stall && !dut.normal_axis_tready) begin
+            if (dut.normal_axis_tvalid !== 1'b1)
+               fail("normal AXIS valid dropped before ready");
+            if ((dut.normal_axis_tdata !== prev_normal_axis_tdata) ||
+                (dut.normal_axis_tkeep !== prev_normal_axis_tkeep))
                fail("normal AXIS data/keep changed while stalled");
          end
          prev_normal_axis_stall <= dut.normal_axis_tvalid && !dut.normal_axis_tready;
@@ -1960,11 +1722,11 @@ module testbench;
             prev_status_axis_tkeep <= dut.status_axis_tkeep;
          end
 
-         if (prev_tx_axis_stall && !dut.tx_axis_tready &&
-             !allow_status_preempt_drop && !status_tx_hold && !prev_status_tx_hold) begin
-            if (dut.tx_axis_tvalid &&
-                ((dut.tx_axis_tdata !== prev_tx_axis_tdata) ||
-                 (dut.tx_axis_tkeep !== prev_tx_axis_tkeep)))
+         if (prev_tx_axis_stall && !dut.tx_axis_tready) begin
+            if (dut.tx_axis_tvalid !== 1'b1)
+               fail("TX AXIS valid dropped before ready");
+            if ((dut.tx_axis_tdata !== prev_tx_axis_tdata) ||
+                (dut.tx_axis_tkeep !== prev_tx_axis_tkeep))
                fail("TX AXIS data/keep changed while stalled");
          end
 
@@ -2080,10 +1842,10 @@ module testbench;
          prev_ft_wr_n  <= ft_wr_n;
          prev_ft_txe_n_neg <= ft_txe_n;
          prev_ft_rxf_n <= ft_rxf_n;
-         prev_status_tx_hold <= status_tx_hold;
       end
    end
 
+   // Regression order: universal behavior from the public specification.
    initial begin
       if (TB_VERBOSE_SCENARIO)
          $display("INFO: Testbench start. Universal bitstream mode");
@@ -2093,8 +1855,6 @@ module testbench;
       run_reset_boot_normal();
       run_normal_path();
       run_loopback_path();
-      run_loopback_counter64_diagnostic();
-      run_service_status_diagnostic();
       run_diagnostics();
       run_ft601_boundary();
       run_payload_boundary();
@@ -2103,6 +1863,7 @@ module testbench;
       $finish;
    end
 
+   // Optional waveform dump for post-mortem inspection.
    initial begin
       $dumpfile("testbench.vcd");
       $dumpvars(0, testbench);

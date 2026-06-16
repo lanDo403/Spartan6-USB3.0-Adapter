@@ -107,14 +107,14 @@ Service-команды выполняются в stop-and-wait режиме. `SE
 Проверенная команда сборки для `MSYS2 MinGW x64`:
 
 ```powershell
-cd .\ft601_test
+cd .\software
 g++ -std=c++11 -Wall -Wextra -pedantic main.cpp app_log.cpp ft601_device.cpp service_protocol.cpp payload_test.cpp throughput.cpp -I. -L.\WU_FTD3XXLib\Lib\Dynamic\x64 -lFTD3XXWU -o main_gpp.exe
 ```
 
 ## Запуск
 
 ```powershell
-cd .\ft601_test
+cd .\software
 .\main_gpp.exe
 ```
 

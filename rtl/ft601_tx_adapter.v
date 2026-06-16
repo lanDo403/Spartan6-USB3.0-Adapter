@@ -11,9 +11,6 @@ module ft601_tx_adapter #(
 	input                    prefetch_phase_i,
 	input                    burst_phase_i,
 	input                    bus_wr_hs_i,
-	input                    block_i,
-	input                    prefetch_en_i,
-	input                    status_sel_i,
 	input                    s_axis_tvalid_i,
 	input  [DATA_LEN-1:0]    s_axis_tdata_i,
 	input  [BE_LEN-1:0]      s_axis_tkeep_i,
@@ -32,10 +29,8 @@ module ft601_tx_adapter #(
 	reg [BE_LEN-1:0]   buf_keep_ff;
 	reg out_valid_ff;
 	reg buf_valid_ff;
-	reg prefetch_en_ff;
-	reg src_accept_en_ff;
+	reg tx_accept_en_ff;
 	reg bus_drive_ff;
-	reg status_sel_d_ff;
 
 	reg [DATA_LEN-1:0] out_data_next;
 	reg [DATA_LEN-1:0] buf_data_next;
@@ -46,23 +41,20 @@ module ft601_tx_adapter #(
 
 	wire bus_wr_hs;
 	wire bus_wr_req;
-	wire src_accept_en;
+	wire tx_accept_en;
 	wire buf_ready;
 	wire s_axis_hs;
 	wire [1:0] buf_used;
-	wire status_start;
 
-	assign status_start = status_sel_i && !status_sel_d_ff;
-	assign bus_wr_hs = bus_wr_hs_i && out_valid_ff && !status_start;
-	assign bus_wr_req = !txe_n_i && out_valid_ff && !status_start;
-	assign src_accept_en = status_sel_i || !txe_n_i;
+	assign bus_wr_hs = bus_wr_hs_i && out_valid_ff;
+	assign bus_wr_req = !txe_n_i && out_valid_ff;
+	assign tx_accept_en = !txe_n_i;
 	assign buf_used = {1'b0, out_valid_ff} +
 	                       {1'b0, buf_valid_ff};
-	assign buf_ready = status_start || (buf_used < 2'd2);
+	assign buf_ready = (buf_used < 2'd2);
 	assign s_axis_hs = s_axis_tvalid_i && s_axis_tready_o;
 
 	// One output word plus one buffered word are enough for continuous FT601 TX bursts.
-	// block_i only blocks new source pops during mode switching.
 	always @(*) begin
 		out_data_next = out_data_ff;
 		out_keep_next = out_keep_ff;
@@ -70,11 +62,6 @@ module ft601_tx_adapter #(
 		buf_keep_next = buf_keep_ff;
 		out_valid_next = out_valid_ff;
 		buf_valid_next = buf_valid_ff;
-
-		if (status_start) begin
-			out_valid_next = 1'b0;
-			buf_valid_next = 1'b0;
-		end
 
 		if (bus_wr_hs) begin
 			if (buf_valid_ff) begin
@@ -110,9 +97,7 @@ module ft601_tx_adapter #(
 			buf_keep_ff <= {BE_LEN{1'b0}};
 			out_valid_ff <= 1'b0;
 			buf_valid_ff <= 1'b0;
-			prefetch_en_ff <= 1'b0;
-			src_accept_en_ff <= 1'b0;
-			status_sel_d_ff <= 1'b0;
+			tx_accept_en_ff <= 1'b0;
 		end
 		else begin
 			out_data_ff <= out_data_next;
@@ -121,9 +106,7 @@ module ft601_tx_adapter #(
 			buf_keep_ff <= buf_keep_next;
 			out_valid_ff <= out_valid_next;
 			buf_valid_ff <= buf_valid_next;
-			prefetch_en_ff <= prefetch_en_i;
-			src_accept_en_ff <= src_accept_en;
-			status_sel_d_ff <= status_sel_i;
+			tx_accept_en_ff <= tx_accept_en;
 		end
 	end
 
@@ -143,7 +126,7 @@ module ft601_tx_adapter #(
 		end
 	end
 
-	assign s_axis_tready_o = !block_i && prefetch_en_ff && src_accept_en_ff && buf_ready;
+	assign s_axis_tready_o = tx_accept_en_ff && buf_ready;
 	assign bus_valid_o = out_valid_ff;
 	assign idle_o = !out_valid_ff && !buf_valid_ff;
 	assign bus_data_o = out_data_ff;

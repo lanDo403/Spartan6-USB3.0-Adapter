@@ -9,7 +9,6 @@ module rx_stream_router #(
 	input                     rst_n,
 	input                     block_i,
 	input                     loopback_mode_i,
-	input                     rxf_n_i,
 
 	input                     s_axis_tvalid_i,
 	output                    s_axis_tready_o,
@@ -23,9 +22,7 @@ module rx_stream_router #(
 	output                    m_payload_axis_tvalid_o,
 	input                     m_payload_axis_tready_i,
 	output [DATA_LEN-1:0]     m_payload_axis_tdata_o,
-	output [BE_LEN-1:0]       m_payload_axis_tkeep_o,
-
-	output                    tx_prefetch_en_o
+	output [BE_LEN-1:0]       m_payload_axis_tkeep_o
 );
 
 	localparam [DATA_LEN-1:0] CMD_MAGIC = 32'hA55A5AA5;
@@ -41,19 +38,20 @@ module rx_stream_router #(
 	wire s_axis_full_keep;
 	wire s_axis_has_keep;
 	wire cmd_magic_match;
+	wire payload_route_selected;
 	wire payload_buf_ready;
 	wire payload_word_accept;
 	wire s_axis_hs;
-	wire rx_router_busy;
 
 	assign s_axis_full_keep = (s_axis_tkeep_i == {BE_LEN{1'b1}});
 	assign s_axis_has_keep = |s_axis_tkeep_i;
 	assign cmd_magic_match = s_axis_full_keep && (s_axis_tdata_i == CMD_MAGIC);
+	assign payload_route_selected = !cmd_wait_opcode_ff && loopback_mode_i &&
+	                                !cmd_magic_match && s_axis_has_keep;
 	assign payload_buf_ready = !payload_valid_ff || m_payload_axis_tready_i;
-	assign payload_word_accept = !cmd_wait_opcode_ff && loopback_mode_i &&
-	                        !cmd_magic_match && s_axis_has_keep;
+	assign payload_word_accept = payload_route_selected;
 
-	assign s_axis_tready_o = !block_i && (!loopback_mode_i || payload_buf_ready || cmd_wait_opcode_ff);
+	assign s_axis_tready_o = !block_i && (!payload_route_selected || payload_buf_ready);
 	assign s_axis_hs = s_axis_tvalid_i && s_axis_tready_o;
 
 	// Service parser consumes CMD_MAGIC and the next beat as opcode.
@@ -109,8 +107,5 @@ module rx_stream_router #(
 	assign m_payload_axis_tvalid_o = payload_valid_ff;
 	assign m_payload_axis_tdata_o = payload_data_ff;
 	assign m_payload_axis_tkeep_o = payload_keep_ff;
-	assign rx_router_busy = !rxf_n_i || s_axis_tvalid_i || cmd_wait_opcode_ff ||
-	                            cmd_valid_ff || payload_valid_ff;
-	assign tx_prefetch_en_o = !loopback_mode_i || !rx_router_busy;
 
 endmodule

@@ -21,10 +21,6 @@ module ft601_fsm #(
 	input  [DATA_LEN-1:0]    rx_data_i,
 	input  [BE_LEN-1:0]      rx_keep_i,
 
-	input                    mode_switch_busy_i,
-	input                    tx_prefetch_en_i,
-	input                    tx_status_sel_i,
-
 	output [DATA_LEN-1:0]    tx_data_o,
 	output [BE_LEN-1:0]      tx_keep_o,
 	output                   wr_n,
@@ -58,15 +54,19 @@ module ft601_fsm #(
 	wire tx_bus_wr_hs;
 	wire rx_takeover_req;
 	wire turnaround_phase;
+	wire tx_drive_allowed;
 
 	assign rx_start_req = !rxf_n && m_axis_tready_i;
 	assign rx_burst_req = !rxf_n && m_axis_tready_i;
-	assign rx_takeover_req = !mode_switch_busy_i && rx_start_req;
+	assign rx_takeover_req = rx_start_req;
 	assign tx_wr_req = !txe_n && tx_bus_valid;
 	assign tx_burst_req = tx_wr_req;
 	assign tx_bus_wr_hs = ((state == TX_PREFETCH) || (state == TX_BURST)) &&
 	                           tx_wr_req;
 	assign turnaround_phase = (state == TURNAROUND);
+	assign tx_drive_allowed = ((state == ARB) && !rx_start_req) ||
+	                          (state == TX_PREFETCH) ||
+	                          (state == TX_BURST);
 
 	always @(negedge clk) begin
 		if (!rst_n)
@@ -78,7 +78,7 @@ module ft601_fsm #(
 	always @(*) begin
 		next_state = state;
 		case (state)
-			ARB:         next_state = (!mode_switch_busy_i && rx_start_req) ? RX_START :
+			ARB:         next_state = rx_start_req ? RX_START :
 			                         tx_wr_req ? TX_PREFETCH : ARB;
 			TX_PREFETCH: next_state = rx_takeover_req ? TURNAROUND :
 			                         tx_burst_req ? TX_BURST : TX_PREFETCH;
@@ -122,9 +122,6 @@ module ft601_fsm #(
 		.prefetch_phase_i(state == TX_PREFETCH),
 		.burst_phase_i(state == TX_BURST),
 		.bus_wr_hs_i(tx_bus_wr_hs),
-		.block_i(mode_switch_busy_i),
-		.prefetch_en_i(tx_prefetch_en_i),
-		.status_sel_i(tx_status_sel_i),
 		.s_axis_tvalid_i(s_axis_tvalid_i),
 		.s_axis_tdata_i(s_axis_tdata_i),
 		.s_axis_tkeep_i(s_axis_tkeep_i),
@@ -140,7 +137,7 @@ module ft601_fsm #(
 	assign wr_n = turnaround_phase ? 1'b1 : tx_wr_n;
 	assign rd_n = turnaround_phase ? 1'b1 : rx_rd_n;
 	assign oe_n = turnaround_phase ? 1'b1 : rx_oe_n;
-	assign drive_tx = turnaround_phase ? 1'b0 : tx_drive;
+	assign drive_tx = (turnaround_phase || !tx_drive_allowed) ? 1'b0 : tx_drive;
 	assign idle_o = (state == ARB) && tx_idle && rx_idle && wr_n && rd_n && oe_n && !drive_tx;
 
 endmodule

@@ -7,7 +7,6 @@ module axis_fifo_read_adapter #(
 )(
 	input                     clk,
 	input                     rst_n,
-	input                     enable_i,
 
 	input  [FIFO_DATA_LEN-1:0] fifo_data_i,
 	input                     fifo_empty_i,
@@ -37,7 +36,7 @@ module axis_fifo_read_adapter #(
 	assign m_axis_tkeep_o = out_word_ff[KEEP_LEN-1:0];
 	assign m_axis_hs = m_axis_tvalid_o && m_axis_tready_i;
 	assign buf_used = buf_count_ff + {1'b0, fifo_ren_pending_ff};
-	assign fifo_ren = enable_i && !fifo_empty_i && ((buf_used < 2'd2) || m_axis_hs);
+	assign fifo_ren = !fifo_empty_i && ((buf_used < 2'd2) || m_axis_hs);
 	assign fifo_ren_o = fifo_ren;
 
 	always @(*) begin

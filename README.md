@@ -34,7 +34,7 @@ Loopback FIFO хранит не только `DATA[31:0]`, но и `BE[3:0]`, п
 
 ![Service/control тракт](images/2_3.png)
 
-Если status запрошен рядом с активным payload-потоком, RTL останавливает дальнейшее чтение payload FIFO на время service-read фазы. Payload снова разрешается только после того, как FT601 деактивирует `TXE_N`, то есть host-side чтение status frame завершилось. Уже лежащие в USB endpoint старые payload-слова не исчезают, поэтому `ft601_test` при чтении статуса ищет `STATUS_MAGIC` с ограниченным пропуском stale-слов.
+Если status запрошен рядом с активным payload-потоком, RTL останавливает дальнейшее чтение payload FIFO на время service-read фазы. Дальше возможны два легальных варианта: если host держит `TXE_N=0` и продолжает длинное чтение, payload может пойти сразу за `STATUS_MAGIC/status_word`; если host завершает короткое status-read и поднимает `TXE_N`, payload остается в FIFO до следующего чтения. Уже лежащие в USB endpoint старые payload-слова не исчезают, поэтому D3XX-утилита из `software/` при чтении статуса ищет `STATUS_MAGIC` с ограниченным пропуском stale-слов.
 
 ## Service protocol
 
@@ -88,31 +88,42 @@ status_word
 
 ```text
 logic_analyzer/
-├── source/                         # RTL, testbench и constraints
+├── rtl/                            # RTL и ограничения
 │   ├── top.v                       # Верхнеуровневая интеграция
 │   ├── ft601_wrapper.v             # Физическая граница FT601
-│   ├── ft601_fsm.v                 # Координация FT601 bus
-│   ├── ft601_rx_adapter.v          # FT601 RX -> stream
-│   ├── ft601_tx_adapter.v          # Stream -> FT601 TX
+│   ├── ft601_fsm.v                 # Управление шиной FT601
+│   ├── ft601_rx_adapter.v          # Преобразование чтения FT601 в stream
+│   ├── ft601_tx_adapter.v          # Преобразование stream в запись FT601
 │   ├── axis_tx_arbiter.v           # Арбитраж TX-источников
-│   ├── rx_stream_router.v          # Разделение service/payload RX path
+│   ├── rx_stream_router.v          # Разделение служебного и payload RX-потока
 │   ├── cmd_decoder.v               # Декодер служебных команд
-│   ├── status_source.v             # Источник status frame
-│   ├── axis_fifo_write_adapter.v   # Stream-to-FIFO write adapter
-│   ├── axis_fifo_read_adapter.v    # FIFO-to-stream read adapter
-│   ├── async_fifo.v                # Async FIFO normal path
-│   ├── loopback_fifo.v             # FIFO loopback path
-│   ├── testbench.v                 # Сценарный RTL testbench
+│   ├── status_source.v             # Формирование служебного status frame
+│   ├── service_status_policy.v     # Окно чтения status и блокировка payload
+│   ├── axis_fifo_write_adapter.v   # Адаптер записи stream-слов в FIFO
+│   ├── axis_fifo_read_adapter.v    # Адаптер чтения FIFO в stream-формате
+│   ├── async_fifo.v                # Асинхронная FIFO для normal path
+│   ├── loopback_fifo.v             # FIFO для loopback path
+│   ├── testbench.v                 # Старый Verilog-стенд; основной regression в tb/
 │   └── callistoS6.ucf              # Ограничения Spartan-6
-├── ft601_test/                     # Консольная D3XX-утилита для ПК
-│   ├── main.cpp                    # Меню и dispatch операций
-│   ├── ft601_device.*              # Работа с устройством и pipe
-│   ├── service_protocol.*          # Service protocol и status
-│   ├── payload_test.*              # Raw payload write/read
+├── tb/                             # SystemVerilog testbench для Vivado XSim
+│   ├── testbench.sv                # Полный regression
+│   ├── testbench_main.sv           # Основные публичные сценарии
+│   ├── testbench_requirements.sv   # Основные сценарии и проверки требований
+│   ├── tb_pkg.sv                   # Общие константы, типы и helper-функции
+│   ├── tb_assertions.svh           # Assertions и инварианты протоколов
+│   ├── tb_monitors.svh             # Пассивные мониторы шин и stream-линий
+│   ├── tb_scoreboard.svh           # Сравнение ожидаемых и фактических данных
+│   ├── tb_coverage.svh             # Счетчики покрытия и SystemVerilog covergroups
+│   └── scenarios/                  # Сценарные группы
+├── software/                       # Консольная D3XX-утилита для ПК
+│   ├── main.cpp                    # Меню и запуск операций
+│   ├── ft601_device.*              # Работа с устройством и каналами FTDI
+│   ├── service_protocol.*          # Служебный протокол и чтение status
+│   ├── payload_test.*              # Запись и чтение raw payload
 │   ├── throughput.*                # Расчет прикладной скорости
-│   ├── app_log.*                   # Timestamped логирование
+│   ├── app_log.*                   # Логирование с временными метками
 │   ├── FTD3XX.h                    # Локальный заголовок D3XX
-│   ├── WU_FTD3XXLib/               # DLL и import/static libraries D3XX
+│   ├── WU_FTD3XXLib/               # DLL и библиотеки D3XX
 │   ├── WU_FTD3XX_Driver/           # Пакет драйвера FTDI D3XX
 │   └── README.md                   # Сборка и использование утилиты
 ├── images/                         # Схемы и иллюстрации для README
@@ -135,7 +146,15 @@ logic_analyzer/
 
 ## Проверка RTL
 
-В проекте есть testbench `source/testbench.v`. Он проверяет основные сценарии работы RTL, включая reset, normal path, loopback path, diagnostics и граничные случаи обмена с FT601.
+Основной тестовый стенд находится в `tb/` и написан на SystemVerilog. Официальная локальная симуляция выполняется в Vivado XSim, а не в Icarus. Точки входа:
+
+- `tb/testbench_main.sv` - основные публичные сценарии: reset, normal path, loopback path, service/control.
+- `tb/testbench_requirements.sv` - основные сценарии и дополнительные проверки требований FT601 boundary, payload, router, arbiter и mode/status policy.
+- `tb/testbench.sv` - полный regression.
+
+Проверки включают scoreboard, постоянные мониторы, assertions, обязательные счетчики покрытия и функциональное покрытие SystemVerilog через `covergroup`. Отчет покрытия формируется через Vivado `xcrg`.
+
+Команды запуска не дублируются в README; актуальная последовательность Vivado XSim приведена в `SPECIFICATION.md`. После запуска в `xsim.log` должен быть итог `TEST PASSED` и `COVERAGE SUMMARY END missing_bins=0`.
 
 Структурная схема тестбенча:
 
@@ -143,8 +162,8 @@ logic_analyzer/
 
 ## Проверка с ПК
 
-Сборка `ft601_test` описана в `ft601_test/README.md`. Команда сборки использует `MSYS2 MinGW x64` и библиотеку D3XX из `WU_FTD3XXLib`.
+Сборка D3XX-утилиты описана в `software/README.md`. Команда сборки использует `MSYS2 MinGW x64` и библиотеку D3XX из `WU_FTD3XXLib`.
 
-Минимальный ручной сценарий на железе такой. Сначала прошить FPGA и убедиться, что FT601 настроен в `245 synchronous FIFO mode`. Затем запустить `ft601_test`, прочитать `Get FPGA status`, включить `Set loopback mode`, выполнить `Write test payload` и отдельно включить `Read payload to file`. После этого можно вернуться через `Set normal mode` и при необходимости очистить `service_frame_error` командой `Clear service frame error`.
+Минимальный ручной сценарий на железе такой. Сначала прошить FPGA и убедиться, что FT601 настроен в `245 synchronous FIFO mode`. Затем запустить утилиту из `software/`, прочитать `Get FPGA status`, включить `Set loopback mode`, выполнить `Write test payload` и отдельно включить `Read payload to file`. После этого можно вернуться через `Set normal mode` и при необходимости очистить `service_frame_error` командой `Clear service frame error`.
 
 Raw-операции `Write test payload` и `Read payload to file` являются debug-инструментами. `Write test payload` пишет `64` значения счетчика в `EP02`, каждое значение идет четырьмя байтами: `00 00 00 01`, `00 00 00 02` и далее. В `normal mode` это не echo-тест: normal TX path формируется внешним GPIO-источником. `Read payload to file` включает потоковое чтение raw payload чанками по `256 KiB`, использует D3XX stream pipe, печатает статистику примерно раз в секунду и работает до нажатия `q`. Status frame читается только через `Get FPGA status`.
