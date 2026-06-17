@@ -14,11 +14,13 @@
 
 namespace {
 
+// Raw reads use a short timeout so the user can stop an idle stream with 'q'.
 constexpr ULONG RAW_READ_CHUNK_BYTES = 256u * 1024u;
 constexpr ULONG RAW_READ_TIMEOUT_MS = 100u;
 constexpr DWORD RAW_READ_STATS_PERIOD_MS = 1000u;
 constexpr DWORD RAW_READ_STATS_POLL_MS = 100u;
 
+// Keeps endpoint metadata together while validating the FT601 configuration.
 struct PipeSummary {
     UCHAR interface_index;
     UCHAR pipe_index;
@@ -67,6 +69,7 @@ std::string PipeTypeName(UCHAR pipe_type) {
 
 bool LoadDeviceList(std::vector<FT_DEVICE_LIST_INFO_NODE>& devices,
                     std::string& err) {
+    // The D3XX API requires a two-step enumerate-then-fill sequence.
     DWORD num_devices = 0;
     FT_STATUS st = FT_CreateDeviceInfoList(&num_devices);
     if (FT_FAILED(st)) {
@@ -104,6 +107,7 @@ void PrintSelectedDevice(const FT_DEVICE_LIST_INFO_NODE& device) {
 std::vector<PipeSummary> CollectPipes(FT_HANDLE h) {
     std::vector<PipeSummary> pipes;
 
+    // Walk all interfaces because endpoint indexes are descriptor-local.
     FT_CONFIGURATION_DESCRIPTOR cfg;
     std::memset(&cfg, 0, sizeof(cfg));
 
@@ -181,6 +185,7 @@ bool VerifyRequiredPipes(FT_HANDLE h, std::string& err) {
     bool found_out = false;
     bool found_in = false;
 
+    // Firmware and host utility both assume bulk OUT 0x02 and bulk IN 0x82.
     for (const PipeSummary& pipe : pipes) {
         const bool is_bulk = FT_IS_BULK_PIPE(pipe.info.PipeType);
         if (pipe.info.PipeId == OUT_PIPE && is_bulk &&
@@ -212,6 +217,7 @@ void RawReadStatsWorker(const std::atomic<bool>& stop_requested,
     uint64_t prev_bytes = total_bytes.load();
     ThroughputTimePoint prev_time = ThroughputNow();
 
+    // Report interval throughput without blocking the read loop.
     while (!stop_requested.load()) {
         for (DWORD waited_ms = 0;
              waited_ms < RAW_READ_STATS_PERIOD_MS && !stop_requested.load();
@@ -249,10 +255,12 @@ bool IsDisconnectStatus(FT_STATUS st) {
 }
 
 bool IsRecoverablePipeStatus(FT_STATUS st) {
+    // FT_OTHER_ERROR is commonly observed after aborted/failed bulk transfers.
     return IsDisconnectStatus(st) || st == FT_OTHER_ERROR;
 }
 
 void AbortPipeBestEffort(FT_HANDLE h, UCHAR pipe_id) {
+    // Cleanup errors are intentionally ignored so the original error survives.
     if (h != nullptr) {
         FT_AbortPipe(h, pipe_id);
     }
@@ -261,6 +269,7 @@ void AbortPipeBestEffort(FT_HANDLE h, UCHAR pipe_id) {
 bool OpenDevice(FT_HANDLE& h, std::string& err) {
     h = nullptr;
 
+    // Only one board is expected during manual tests; DEVICE_INDEX selects it.
     std::vector<FT_DEVICE_LIST_INFO_NODE> devices;
     if (!LoadDeviceList(devices, err)) {
         return false;
@@ -342,6 +351,7 @@ bool WriteWords(FT_HANDLE h,
 
     ULONG sent = 0;
     while (sent < total_bytes) {
+        // Bound each transfer so large payloads do not depend on one D3XX call.
         const ULONG want = std::min(CHUNK_BYTES, total_bytes - sent);
         ULONG written = 0;
         FT_STATUS st = FT_WritePipe(
@@ -400,6 +410,7 @@ bool ReadExactWords(FT_HANDLE h,
 
     ULONG received = 0;
     while (received < total_bytes) {
+        // Status/control reads require an exact word count, not "some bytes".
         ULONG got = 0;
         FT_STATUS st = FT_ReadPipe(
             h,
@@ -447,6 +458,7 @@ bool DoReadToFile(FT_HANDLE h,
         *last_status = FT_OK;
     }
 
+    // Enable D3XX stream mode only for raw payload capture.
     FT_STATUS st = FT_SetStreamPipe(
         h,
         FALSE,
@@ -510,6 +522,7 @@ bool DoReadToFile(FT_HANDLE h,
         const ThroughputTimePoint read_end = ThroughputNow();
 
         if (read_status == FT_TIMEOUT) {
+            // Idle stream is not an error; keep polling until the user stops it.
             continue;
         }
 
@@ -530,6 +543,7 @@ bool DoReadToFile(FT_HANDLE h,
         }
 
         if (!out.is_open()) {
+            // Avoid creating empty dump files when no payload arrives.
             out.open(path.c_str(), std::ios::binary);
             if (!out) {
                 err = "Cannot open file: " + path;
@@ -574,6 +588,7 @@ bool DoReadToFile(FT_HANDLE h,
         }
     }
 
+    // Restore the default blocking timeout for later service/status commands.
     FT_ClearStreamPipe(h, FALSE, FALSE, IN_PIPE);
     const FT_STATUS timeout_status = FT_SetPipeTimeout(h, IN_PIPE, TIMEOUT_MS);
     if (FT_FAILED(timeout_status) && err.empty()) {

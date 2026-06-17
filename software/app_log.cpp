@@ -10,11 +10,13 @@
 
 namespace {
 
+// Logging is process-global because the utility is a single interactive tool.
 bool g_log_enabled = true;
 std::ofstream g_log_file;
 std::streambuf* g_cout_original = nullptr;
 std::streambuf* g_cerr_original = nullptr;
 
+// Stream buffer that mirrors console output into the session log.
 class TeeStreambuf : public std::streambuf {
 public:
     explicit TeeStreambuf(std::streambuf* console)
@@ -74,6 +76,7 @@ bool InitLogFile(const std::string& path) {
         return true;
     }
 
+    // Append sessions so one bench run keeps a continuous operation history.
     g_log_file.open(path.c_str(), std::ios::out | std::ios::app);
     if (!g_log_file) {
         return false;
@@ -94,6 +97,7 @@ bool InitLogFile(const std::string& path) {
 }
 
 void ShutdownLogFile() {
+    // Restore standard streams before destroying the tee buffers.
     if (g_cout_original != nullptr) {
         std::cout.rdbuf(g_cout_original);
         g_cout_original = nullptr;
@@ -142,6 +146,7 @@ std::string MakeDataFileName(const std::string& mode,
 
 LogSilenceGuard::LogSilenceGuard()
     : previous_(g_log_enabled) {
+    // Used for menus so log.txt contains actions/results, not repeated prompts.
     SetLogEnabled(false);
 }
 

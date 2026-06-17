@@ -9,7 +9,10 @@
 
 namespace {
 
+// Bound the scan so a missing status frame becomes a controlled error.
 constexpr size_t STATUS_SCAN_WORD_LIMIT = 4096u;
+
+// Current RTL uses only bits [5:0] in status_word.
 constexpr uint32_t STATUS_RESERVED_MASK = 0xFFFFFFC0u;
 
 void PrintHex32(const char* label, uint32_t value) {
@@ -27,6 +30,7 @@ bool SendCommandFrame(FT_HANDLE h,
                       uint32_t opcode,
                       std::string& err,
                       FT_STATUS* last_status) {
+    // The FPGA command decoder consumes exactly CMD_MAGIC then opcode.
     const std::vector<uint32_t> frame = {CMD_MAGIC, opcode};
     return WriteWords(h, frame, err, last_status);
 }
@@ -37,6 +41,7 @@ bool ReadStatusFrame(FT_HANDLE h,
                      FT_STATUS* last_status) {
     size_t discarded_words = 0;
 
+    // Payload or stale words can be ahead of the service response in EP82.
     while (discarded_words < STATUS_SCAN_WORD_LIMIT) {
         std::vector<uint32_t> word;
         if (!ReadExactWords(h, 1, word, err, last_status)) {
@@ -54,6 +59,7 @@ bool ReadStatusFrame(FT_HANDLE h,
         }
 
         if (!LooksLikeStatusWord(status[0])) {
+            // Treat a false STATUS_MAGIC hit as stale data and keep scanning.
             discarded_words += 2u;
             continue;
         }

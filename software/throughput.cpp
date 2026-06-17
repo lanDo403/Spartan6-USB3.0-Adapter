@@ -14,6 +14,7 @@ double ThroughputSeconds(ThroughputTimePoint start, ThroughputTimePoint end) {
     LARGE_INTEGER frequency = {};
     QueryPerformanceFrequency(&frequency);
     if (frequency.QuadPart == 0) {
+        // Defensive fallback; Windows normally provides this counter.
         return 0.0;
     }
 
@@ -23,12 +24,14 @@ double ThroughputSeconds(ThroughputTimePoint start, ThroughputTimePoint end) {
 
 void PrintThroughput(const std::string& label, uint64_t bytes, double seconds) {
     if (bytes == 0) {
+        // Avoid presenting meaningless rates for empty reads.
         std::cout << label << ": 0 bytes, throughput not measured."
                   << std::endl;
         return;
     }
 
     if (seconds <= 0.0) {
+        // Very small transfers can round to zero at timer resolution limits.
         std::cout << label << ": " << bytes
                   << " bytes, elapsed time is too small to measure."
                   << std::endl;

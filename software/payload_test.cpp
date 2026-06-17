@@ -14,6 +14,7 @@ namespace {
 bool SaveWordsBinary(const std::string& path,
                      const std::vector<uint32_t>& words,
                      std::string& err) {
+    // Save exactly the host-side words that were submitted to FT_WritePipe.
     std::ofstream out(path.c_str(), std::ios::binary);
     if (!out) {
         err = "Cannot create binary file: " + path;
@@ -35,6 +36,7 @@ bool SaveWordsBinary(const std::string& path,
 }
 
 uint32_t BuildRawTestWord(uint32_t word_index) {
+    // Produce byte-visible counters in the same order as raw USB dumps.
     const uint32_t counter = word_index + 1u;
     return ((counter & 0x000000FFu) << 24u) |
            ((counter & 0x0000FF00u) << 8u) |
@@ -76,6 +78,7 @@ bool DoReadTestPayload(FT_HANDLE h,
                        uint64_t& out_bytes,
                        std::string& err,
                        FT_STATUS* last_status) {
+    // File creation is delayed inside DoReadToFile until first payload bytes.
     out_file = MakeDataFileName("raw", "rx", "bin");
 
     if (!DoReadToFile(h, out_file, err, out_bytes, last_status)) {

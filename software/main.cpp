@@ -10,6 +10,7 @@
 
 namespace {
 
+// Prints timestamped boundaries around each user action in both console and log.
 class ActionScope {
 public:
     explicit ActionScope(const char* name) : name_(name) {
@@ -27,6 +28,7 @@ private:
 };
 
 int ReadMenuChoice() {
+    // The interactive menu is console-only; action output is still logged.
     LogSilenceGuard hide_menu_from_log;
 
     std::cout << "\nSelect action:\n";
@@ -55,6 +57,7 @@ bool TryReopenAndRetry(FT_HANDLE& h,
                        std::string& err,
                        const char* retry_label,
                        bool (*operation)(FT_HANDLE, std::string&, FT_STATUS*)) {
+    // Pipe errors often leave the D3XX handle usable only after reopen.
     if (!IsRecoverablePipeStatus(op_status)) {
         return false;
     }
@@ -140,6 +143,7 @@ void HandleServiceCommand(FT_HANDLE& h, uint32_t opcode, const char* label) {
     std::string err;
     FT_STATUS op_status = FT_OK;
 
+    // Every service request is a two-word frame sent over the normal OUT pipe.
     std::cout << "Sending " << label << "...\n";
     if (!SendCommandFrame(h, opcode, err, &op_status)) {
         std::cerr << "COMMAND ERROR: " << err << "\n";
@@ -162,6 +166,7 @@ int main() {
     FT_HANDLE h = nullptr;
     std::string err;
 
+    // Open logging before the device so USB discovery/errors are captured.
     if (!InitLogFile("log.txt")) {
         std::cerr << "ERROR: cannot open log.txt\n";
         return 1;
