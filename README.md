@@ -145,11 +145,9 @@ logic_analyzer/
 
 ## Проверка RTL
 
-Основной тестовый стенд находится в `tb/` и написан на SystemVerilog. Официальная локальная симуляция выполняется в Vivado XSim, а не в Icarus. Единственная официальная точка входа - `tb/testbench.sv`; она запускает основные публичные сценарии и дополнительные проверки требований FT601 boundary, payload, router, arbiter и mode/status policy.
+Основной тестовый стенд находится в `tb/` и написан на SystemVerilog. Официальная локальная симуляция выполняется в Vivado XSim. Единственная официальная точка входа - `tb/testbench.sv`; она запускает основные публичные сценарии и дополнительные проверки требований FT601 boundary, payload, router, arbiter и mode/status policy.
 
 Проверки включают scoreboard, постоянные мониторы, immediate assertions, concurrent SVA, обязательные счетчики покрытия и функциональное покрытие SystemVerilog через `covergroup`. `GPIO_CLK` и `CLK` FT601 моделируются как асинхронные домены; при каждом запуске XSim testbench выбирает случайную начальную фазу GPIO-часов относительно FT601-часов. Отчет покрытия формируется через Vivado `xcrg`; текущий full regression закрывает native functional coverage на 100% по 11 covergroup.
-
-Команды запуска не дублируются в README; актуальная последовательность Vivado XSim для разработчика приведена в `AGENTS.md`. После запуска в `xsim.log` должен быть итог `TEST PASSED`, не должно быть `TEST FAILED` или `ERROR: SVA`, и должен присутствовать `COVERAGE SUMMARY END missing_bins=0`.
 
 Структурная схема тестбенча:
 
