@@ -1,5 +1,5 @@
+   // Status window: service response has priority while payload is held intact.
    task run_status_window_with_payload;
-      integer timeout;
       reg     expected_loopback_fifo_empty;
       reg [DATA_LEN-1:0] expected_status;
       begin
@@ -22,18 +22,8 @@
          if (loopback_fifo_wen_n !== 1)
             fail("REQ-STS-002 pending loopback FIFO write count mismatch");
 
-         timeout = 0;
-         while ((dut.loopback_fifo_empty !== 1'b0) &&
-                (dut.loopback_fifo_axis_tvalid !== 1'b1) &&
-                (timeout < 512)) begin
-            @(posedge ft_clk);
-            #TB_POSEDGE_SAMPLE_DELAY;
-            timeout = timeout + 1;
-         end
-         if ((dut.loopback_fifo_empty !== 1'b0) &&
-             (dut.loopback_fifo_axis_tvalid !== 1'b1))
-            fail("REQ-STS-002 loopback payload did not remain pending before status request");
-         expected_loopback_fifo_empty = dut.loopback_fifo_empty;
+         expect_internal_loopback_payload_pending("REQ-STS-002 pending loopback payload",
+                                                  expected_loopback_fifo_empty);
 
          clear_monitors();
          tx_stream_only_mode = 1'b1;
@@ -43,10 +33,7 @@
          expect_known_command_accepted("REQ-STS-002 CMD_GET_STATUS");
          expect_status_response_pending("REQ-STS-002 status window");
 
-         if (dut.status_payload_block !== 1'b1)
-            fail("REQ-STS-002 payload must be blocked while status response is pending");
-         if (dut.loopback_fifo_ren !== 1'b0)
-            fail("REQ-STS-002 loopback FIFO read must not occur while status window blocks payload");
+         expect_internal_status_payload_blocking("REQ-STS-002 status window");
 
          expected_status = build_status_word(1'b1,
                                              1'b0,
@@ -115,9 +102,9 @@
       end
    endtask
 
+   // Mode switch: command is accepted, but mode commit waits for safe FT idle.
    task run_mode_switch_waits_idle;
       integer timeout;
-      reg     busy_seen;
       begin
          scenario_start("mode_switch_waits_idle");
          tb_reset();
@@ -151,21 +138,7 @@
          host_send_command(SVC_SET_LOOPBACK);
          expect_known_command_accepted("REQ-MODE-001 CMD_SET_LOOPBACK");
 
-         timeout = 0;
-         busy_seen = 1'b0;
-         while ((dut.loopback_mode_ft !== 1'b1) && (timeout < 512)) begin
-            @(posedge ft_clk);
-            #TB_POSEDGE_SAMPLE_DELAY;
-            if (dut.mode_switch_busy_ft)
-               busy_seen = 1'b1;
-            if ((dut.loopback_mode_ft === 1'b1) && (dut.fsm_idle_o !== 1'b1))
-               fail("REQ-MODE-001 mode committed before FT path became idle");
-            timeout = timeout + 1;
-         end
-         if (dut.loopback_mode_ft !== 1'b1)
-            fail("REQ-MODE-001 mode switch did not commit to loopback");
-         if (!busy_seen)
-            fail("REQ-MODE-001 mode switch busy state was not observed");
+         expect_internal_mode_switch_commit_after_idle(1'b1, 512, "REQ-MODE-001");
 
          ft_set_txe_now(1'b1);
          wait_for_ft_tx_idle();
@@ -184,6 +157,7 @@
       end
    endtask
 
+   // RX router: service frames and payload words stay on separate paths.
    task run_router_demux_backpressure;
       begin
          scenario_start("router_demux_backpressure");
@@ -240,6 +214,7 @@
       end
    endtask
 
+   // TX arbiter: status wins first, then loopback, then normal payload.
    task run_arbiter_priority;
       reg expected_loopback_fifo_empty;
       reg [DATA_LEN-1:0] expected_status;
@@ -257,7 +232,8 @@
          host_idle();
          wait_ft_cycles(4);
          rx_payload_check_en = 1'b0;
-         expected_loopback_fifo_empty = dut.loopback_fifo_empty;
+         sample_internal_loopback_fifo_empty("REQ-ARB-001 pending loopback payload",
+                                             expected_loopback_fifo_empty);
 
          scoreboard_reset_command_counters();
          host_send_command(SVC_GET_STATUS);

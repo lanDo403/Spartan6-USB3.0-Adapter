@@ -1,5 +1,7 @@
 `timescale 1ns / 1ps
 
+// Centralizes service/status ownership of the shared FT601 IN endpoint.
+// Payload sources are held off until the status response has had a host TX window.
 module service_status_policy (
 	input  clk_i,
 	input  rst_n_i,

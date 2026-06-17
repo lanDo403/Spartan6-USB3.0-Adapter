@@ -1,5 +1,7 @@
 `timescale 1ns / 1ps
 
+// Pointer/control half of the normal-path async FIFO.
+// Data storage is external dual-port SRAM addressed by this module.
 module async_fifo#(
 	parameter DATA_LEN = 32,
 	parameter DEPTH = 8192,

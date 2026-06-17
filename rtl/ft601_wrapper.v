@@ -1,5 +1,7 @@
 `timescale 1ns / 1ps
 
+// Physical FT601 boundary: IO buffers, registered flags, registered strobes,
+// and tri-state control for the shared DATA/BE buses.
 module ft601_wrapper #(
 	parameter DATA_LEN = 32,
 	parameter BE_LEN   = 4
@@ -86,6 +88,7 @@ module ft601_wrapper #(
 		.O(rxf_n_ibuf)
 	);
 
+	// Register active-low availability flags before core logic uses them.
 	always @(negedge clk_o or negedge boundary_rst_n) begin
 		if (!boundary_rst_n) begin
 			txe_n_ff <= 1'b1;
@@ -100,6 +103,7 @@ module ft601_wrapper #(
 	assign txe_n_o = txe_n_ff;
 	assign rxf_n_o = rxf_n_ff;
 
+	// Gate outbound strobes with registered FT601 availability flags at the pin boundary.
 	always @(negedge clk_o or negedge boundary_rst_n) begin
 		if (!boundary_rst_n) begin
 			oe_n_o_ff <= 1'b1;
@@ -143,6 +147,7 @@ module ft601_wrapper #(
 		.O(RD_N)
 	);
 
+	// Register TX data and tri-state enables before driving the bidirectional bus.
 	always @(negedge clk_o or negedge boundary_rst_n) begin
 		if (!boundary_rst_n) begin
 			tx_data_o_ff <= {DATA_LEN{1'b0}};
@@ -191,6 +196,7 @@ module ft601_wrapper #(
 		end
 	endgenerate
 
+	// Register received bus values before exposing them to the FT clock domain core.
 	always @(negedge clk_o or negedge boundary_rst_n) begin
 		if (!boundary_rst_n) begin
 			rx_data_o_ff <= {DATA_LEN{1'b0}};

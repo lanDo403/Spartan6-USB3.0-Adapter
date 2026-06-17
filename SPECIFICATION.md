@@ -159,13 +159,14 @@ RX path работает через `ft601_rx_adapter.v`. FSM активируе
 
 Основной самопроверочный стенд находится в `tb/` и написан на SystemVerilog. Официальный локальный симулятор - Vivado XSim. `rtl/testbench.v` остается старым Verilog-стендом и не является основным regression flow.
 
-Точки входа:
+Тестовый стенд моделирует два независимых clock domain: `GPIO_CLK` для GPIO/write path и `CLK`/`ft_clk` для FT601/read/service path. При запуске XSim начальная фаза `GPIO_CLK` относительно `ft_clk` выбирается случайно, чтобы не привязывать проверки к одному фиксированному взаимному положению фронтов. Для воспроизводимости можно задать plusargs `+TB_RANDOM_SEED=<seed>` и `+TB_GPIO_PHASE_NS=<0..9>`.
+
+Официальная точка входа:
 
 | Файл | Назначение |
 | --- | --- |
-| `tb/testbench_main.sv` | Основные публичные сценарии: reset, normal path, loopback path, service/control. |
-| `tb/testbench_requirements.sv` | Основные сценарии и дополнительные проверки требований FT601 boundary, payload, router, arbiter и mode/status policy. |
-| `tb/testbench.sv` | Полный regression. |
+| `tb/testbench.sv` | Полный regression: основные публичные сценарии и дополнительные проверки требований FT601 boundary, payload, router, arbiter и mode/status policy. |
+| `tb/run_tb.py` | Python 3.5 console runner для запуска full XSim regression, code coverage flow, открытия последнего `xsim.log` и очистки временных каталогов. |
 
 Основные файлы тестового стенда:
 
@@ -174,22 +175,22 @@ RX path работает через `ft601_rx_adapter.v`. FSM активируе
 | `tb/tb_pkg.sv` | Общие константы, типы, коды команд, magic-слова и helper-функции. |
 | `tb/tb_ft601_if.sv` | SystemVerilog interface для внешней шины FT601. |
 | `tb/tb_axis_if.sv` | SystemVerilog interface для внутренних stream-линий. |
-| `tb/tb_common.svh` | Общие задачи подготовки стенда и базовые операции сценариев. |
+| `tb/tb_common.svh` | Общие задачи подготовки стенда, генерация асинхронных clock domains и базовые операции сценариев. |
 | `tb/tb_ft601_driver.svh` | Драйвер модели FT601 для чтения и записи 32-битных слов. |
 | `tb/tb_gpio_driver.svh` | Драйвер GPIO-входа для normal path. |
 | `tb/tb_service_helpers.svh` | Помощники для служебных команд и чтения status frame. |
 | `tb/tb_scoreboard.svh` | Сравнение ожидаемых и фактически принятых данных. |
 | `tb/tb_monitors.svh` | Пассивные проверки шины FT601 и stream-протокола. |
-| `tb/tb_assertions.svh` | Assertions для reset, handshake, arbitration, FSM и ключевых флагов. |
-| `tb/tb_coverage.svh` | Обязательные счетчики покрытия и SystemVerilog `covergroup`. |
+| `tb/tb_assertions.svh` | Immediate assertions и concurrent SVA для reset, handshake, arbitration, FSM, router/control path и ключевых флагов. |
+| `tb/tb_coverage.svh` | Обязательные счетчики покрытия и SystemVerilog `covergroup` на уровне требований. |
 | `tb/tb_runtime.svh` | Итоговый pass/fail, summary покрытия и завершение симуляции. |
 | `tb/scenarios/*.svh` | Группы сценариев для основных потоков и требований спецификации. |
 
 Активные проверки являются проверками требований из этой спецификации; старые сценарии воспроизведения багов, host-log sequences и AXIS_PLAN stage diagnostics не входят в официальный regression.
 
-Постоянные мониторы работают независимо от сценария. Они проверяют, что `WR_N` и `OE_N` не активны одновременно, запись не идет при закрытом `TXE_N`, чтение не идет при закрытом `RXF_N`, `DATA/BE` не конфликтуют на общей шине, а внутренние stream-линии удерживают `valid/data/keep` при `valid && !ready`. Для управляющих FSM также должны проверяться допустимые состояния, допустимые переходы и ключевые флаги, которые напрямую разрешают или блокируют смену состояния, включая арбитраж TX-источников. Фиксированная latency FTDI reference-дизайна не является pass/fail критерием.
+Постоянные мониторы и SVA работают независимо от сценария. Они проверяют, что `WR_N` и `OE_N` не активны одновременно, старт записи происходит только при открытом зарегистрированном `TXE_N`, старт чтения происходит только при открытом зарегистрированном `RXF_N`, `DATA/BE` не конфликтуют на общей шине, а внутренние stream-линии удерживают `valid/data/keep` при `valid && !ready`. Для управляющих FSM также проверяются допустимые состояния, допустимые переходы и ключевые флаги, которые напрямую разрешают или блокируют смену состояния, включая арбитраж TX-источников. Проверки `RXF_N/TXE_N` относятся к старту доступа: после закрытия флага уже начатая FT601 read/write-фаза может штатно завершить release tail. Фиксированная latency FTDI reference-дизайна не является pass/fail критерием.
 
-Pass/fail задают scoreboard, assertions и обязательные счетчики покрытия. Функциональное покрытие SystemVerilog включается через `TB_HAS_SV_COVERGROUP`; модель `covergroup` описывает bins на уровне требований и формирует отчет Vivado `xcrg`. Низкое code/functional coverage не должно использоваться вместо scoreboard, но полный regression должен завершаться без assertion/scoreboard ошибок и с `COVERAGE SUMMARY END missing_bins=0`.
+Pass/fail задают scoreboard, assertions/SVA и обязательные счетчики покрытия. Любое нарушение SVA вызывает `fail(...)` и считается regression failure. Функциональное покрытие SystemVerilog включается через `TB_HAS_SV_COVERGROUP`; модель `covergroup` описывает bins на уровне требований и формирует отчет Vivado `xcrg`. Текущий full regression закрывает native functional coverage на 100%: `Score=100`, `Inst Score=100`, 11 covergroup, `COVERAGE SUMMARY END missing_bins=0`. Code coverage RTL этим числом не измеряется и должен собираться отдельным XSim flow с `-cc_type`.
 
 ### Сценарии использования
 

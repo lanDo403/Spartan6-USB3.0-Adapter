@@ -1,5 +1,7 @@
 `timescale 1ns / 1ps
 
+// Converts a synchronous FIFO read port into a valid/ready stream.
+// The two-entry lookahead hides read latency and keeps output data stable.
 module axis_fifo_read_adapter #(
 	parameter DATA_LEN = 32,
 	parameter KEEP_LEN = 4,
@@ -39,6 +41,8 @@ module axis_fifo_read_adapter #(
 	assign fifo_ren = !fifo_empty_i && ((buf_used < 2'd2) || m_axis_hs);
 	assign fifo_ren_o = fifo_ren;
 
+	// Consume the current output word first, then place a completed FIFO read
+	// into the output slot or the spare lookahead slot.
 	always @(*) begin
 		out_word_next = out_word_ff;
 		buf_word_next = buf_word_ff;

@@ -1,5 +1,7 @@
 `timescale 1ns / 1ps
 
+// Packs GPIO bytes into 32-bit stream words.
+// GPIO_STROB becomes the per-byte keep mask; gaps become zero bytes with keep=0.
 module packer8to32 #(
 	parameter DATA_LEN = 32,
 	parameter GPIO_LEN = 8,
@@ -37,6 +39,7 @@ module packer8to32 #(
 	assign data_shift_next_w = data_next_w[DATA_LEN-1:GPIO_LEN];
 	assign keep_shift_next_w = keep_next_w[BE_LEN-1:1];
 	
+	// After the first valid byte, collect a fixed four-cycle GPIO window.
 	always @(negedge clk) begin
 		if (!rst_n) begin
 			byte_counter <= 2'd0;

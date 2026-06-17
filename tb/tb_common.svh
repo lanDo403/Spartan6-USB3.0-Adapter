@@ -59,6 +59,9 @@ endmodule
 module testbench;
    import tb_pkg::*;
    localparam int TB_POSEDGE_SAMPLE_DELAY = tb_pkg::TB_POSEDGE_SAMPLE_DELAY;
+   localparam int TB_FT_CLK_HALF_NS       = 5;
+   localparam int TB_GPIO_CLK_HALF_NS     = 10;
+   localparam int TB_GPIO_PHASE_MAX_NS    = (2 * TB_FT_CLK_HALF_NS) - 1;
 
    // External clocks and top-level pins controlled directly by the testbench.
    logic                gpio_clk;
@@ -85,7 +88,10 @@ module testbench;
 
    // Byte-level stimulus loaded by the GPIO driver.
    logic [7:0] byte_seq_p [0:TOTAL_WORDS-1];
+   int unsigned tb_random_seed;
+   int unsigned tb_gpio_phase_ns;
 
+   // Monitor interfaces expose DUT wires to checkers without driving inputs.
    tb_ft601_if #(
       .DATA_LEN(DATA_LEN),
       .BE_LEN(BE_LEN)
@@ -121,6 +127,7 @@ module testbench;
       .BE_LEN(BE_LEN)
    ) tx_axis_mon();
 
+   // Include order matters: later files use runtime, scoreboard, and monitor tasks.
    `include "tb_scoreboard.svh"
    `include "tb_runtime.svh"
    `include "tb_coverage.svh"
@@ -130,8 +137,24 @@ module testbench;
    assign ft_data_bus = (host_drive_en && !ft_oe_n) ? host_data_drv : {DATA_LEN{1'bz}};
    assign ft_be_bus   = (host_drive_en && !ft_oe_n) ? host_be_drv   : {BE_LEN{1'bz}};
 
-   always #10  gpio_clk = ~gpio_clk;   // 50 MHz GPIO clock
-   always #5   ft_clk   = ~ft_clk;     // 100 MHz FT601 clock
+   initial begin : ft_clock_gen
+      ft_clk = 1'b0;
+      forever #TB_FT_CLK_HALF_NS ft_clk = ~ft_clk; // 100 MHz FT601 clock
+   end
+
+   initial begin : gpio_clock_gen
+      gpio_clk = 1'b0;
+      if (!$value$plusargs("TB_RANDOM_SEED=%d", tb_random_seed))
+         tb_random_seed = $urandom();
+      tb_random_seed = $urandom(tb_random_seed);
+      if (!$value$plusargs("TB_GPIO_PHASE_NS=%d", tb_gpio_phase_ns))
+         tb_gpio_phase_ns = $urandom_range(TB_GPIO_PHASE_MAX_NS, 0);
+      tb_gpio_phase_ns = tb_gpio_phase_ns % (TB_GPIO_PHASE_MAX_NS + 1);
+      $display("INFO: TB async clocks: random_seed=%0d gpio_phase_ns=%0d",
+               tb_random_seed, tb_gpio_phase_ns);
+      #tb_gpio_phase_ns;
+      forever #TB_GPIO_CLK_HALF_NS gpio_clk = ~gpio_clk; // 50 MHz GPIO clock
+   end
 
    top #(
       .GPIO_LEN(GPIO_LEN),
@@ -208,13 +231,12 @@ module testbench;
    assign tx_axis_mon.data  = dut.tx_axis_tdata;
    assign tx_axis_mon.keep  = dut.tx_axis_tkeep;
 
+   // Shared status-hold predicate lets assertions tolerate legal service preemption.
    assign status_tx_hold = dut.status_frame_active ||
                            dut.service_status_policy.status_payload_hold_ff;
 
    // Deterministic testbench power-up state for all drivers, counters, and capture arrays.
    initial begin
-      gpio_clk      = 1'b0;
-      ft_clk        = 1'b0;
       gpio_strob    = 1'b0;
       fpga_reset    = 1'b1;
       gpio_data     = {GPIO_LEN{1'b0}};
@@ -376,40 +398,18 @@ module testbench;
       end
    endtask
 
-   // Select the full regression unless a category entrypoint overrides it.
-`ifndef TB_REGRESSION_FULL
-`ifndef TB_REGRESSION_MAIN
-`ifndef TB_REGRESSION_REQUIREMENTS
-`define TB_REGRESSION_FULL
-`endif
-`endif
-`endif
-
-   // Regression order: public behavior first. Directed requirement scenarios are added separately.
+   // Full regression order: public behavior first, then directed requirement scenarios.
    initial begin
       if (TB_VERBOSE_SCENARIO)
          $display("INFO: Testbench start. Universal bitstream mode");
       load_vectors();
       build_expected_words();
 
-`ifdef TB_REGRESSION_MAIN
-      run_reset_boot_normal();
-      run_normal_path();
-      run_loopback_path();
-      run_service_control();
-`elsif TB_REGRESSION_REQUIREMENTS
       run_reset_boot_normal();
       run_normal_path();
       run_loopback_path();
       run_service_control();
       run_directed_requirement_scenarios();
-`else
-      run_reset_boot_normal();
-      run_normal_path();
-      run_loopback_path();
-      run_service_control();
-      run_directed_requirement_scenarios();
-`endif
 
       tb_cov_check_requirements();
       tb_finish_regression();

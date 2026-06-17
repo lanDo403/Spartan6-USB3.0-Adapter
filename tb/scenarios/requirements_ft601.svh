@@ -1,6 +1,6 @@
+   // RX priority: an RX request during TX must force TURNAROUND before read.
    task run_ft601_turnaround_rx_priority;
       integer timeout;
-      reg     turnaround_seen;
       begin
          scenario_start("ft601_turnaround_rx_priority");
          tb_reset();
@@ -26,19 +26,7 @@
 
          ft_drive_rx_now(32'hCAFE_0001, FULL_BE, 1'b1, 1'b0);
 
-         timeout = 0;
-         turnaround_seen = 1'b0;
-         while (((ft_rd_n !== 1'b0) || (ft_oe_n !== 1'b0)) && (timeout < 256)) begin
-            @(posedge ft_clk);
-            #TB_POSEDGE_SAMPLE_DELAY;
-            if (dut.ft601_fsm.state === 6'b100000)
-               turnaround_seen = 1'b1;
-            timeout = timeout + 1;
-         end
-         if (!turnaround_seen)
-            fail("REQ-FT-003 RX priority must pass through TURNAROUND");
-         if ((ft_rd_n !== 1'b0) || (ft_oe_n !== 1'b0))
-            fail("REQ-FT-003 RX priority request did not reach FT601 read phase");
+         expect_internal_turnaround_before_read(256, "REQ-FT-003");
 
          @(posedge ft_clk);
          ft_drive_rx_now({DATA_LEN{1'b0}}, {BE_LEN{1'b0}}, 1'b0, 1'b1);
@@ -56,6 +44,7 @@
       end
    endtask
 
+   // RXF_N boundary: closing RX must not commit stale or partial words.
    task run_ft601_rxf_boundary;
       begin
          scenario_start("ft601_rxf_boundary");

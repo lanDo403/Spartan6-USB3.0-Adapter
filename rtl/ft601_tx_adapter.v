@@ -1,5 +1,7 @@
 `timescale 1ns / 1ps
 
+// Converts the selected TX stream into FT601 write strobes and DATA/BE drive.
+// A one-word output plus one spare word keeps bursts running under backpressure.
 module ft601_tx_adapter #(
 	parameter DATA_LEN = 32,
 	parameter BE_LEN   = 4
@@ -89,6 +91,7 @@ module ft601_tx_adapter #(
 		end
 	end
 
+	// Drive the bidirectional FT601 bus only during write-capable TX phases.
 	always @(negedge clk_i) begin
 		if (!rst_n_i) begin
 			out_data_ff <= {DATA_LEN{1'b0}};

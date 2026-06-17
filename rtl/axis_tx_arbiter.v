@@ -1,5 +1,7 @@
 `timescale 1ns / 1ps
 
+// Fixed-priority registered mux for the shared TX stream:
+// status response, then loopback payload, then normal payload.
 module axis_tx_arbiter #(
 	parameter DATA_LEN = 32,
 	parameter BE_LEN   = 4
@@ -56,6 +58,7 @@ module axis_tx_arbiter #(
 	                         loopback_sel ? s_loopback_axis_tkeep_i :
 	                         s_normal_axis_tkeep_i;
 
+	// Output register holds data/keep stable while the FT601 TX adapter stalls.
 	always @(negedge clk) begin
 		if (!rst_n) begin
 			m_axis_tvalid_ff <= 1'b0;

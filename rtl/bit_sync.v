@@ -1,5 +1,6 @@
 `timescale 1ns / 1ps
 
+// Two-flop synchronizer for a single level signal crossing into clk.
 module bit_sync #(
 	parameter RESET_VALUE = 1'b0
 )(

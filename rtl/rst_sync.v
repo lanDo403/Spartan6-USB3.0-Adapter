@@ -1,5 +1,6 @@
 `timescale 1ns / 1ps
 
+// Reset synchronizer: asynchronous assert, synchronous active-low release.
 module rst_sync(
 	input clk,
 	input arst_i,

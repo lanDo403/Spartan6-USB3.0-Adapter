@@ -1,8 +1,8 @@
 `timescale 1ns / 1ps
 
-// This project is divided by two frequency domains. Write domain works on GPIO_CLK from input gpio pin (frequency is changeable). 
-// Write domain includes modules such as gpio_wrapper, packer8to32, async_fifo(write side) and sram_dp(write side).
-// Read domain works on CLK from FT601 (100MHZ). Read domain includes modules such as async_fifo(read side), sram_dp(read side), loopback and ft601_fsm.
+// Top-level integration for GPIO ingress, FT601 bus access, service control,
+// status responses and loopback datapaths. GPIO_CLK and FT601 CLK are separate
+// domains connected through explicit synchronizers and the normal async FIFO.
 
 module top #(
 	parameter GPIO_LEN = 8,
@@ -140,7 +140,8 @@ module top #(
 	wire [DATA_LEN-1:0] tx_axis_tdata;
 	wire [BE_LEN-1:0] tx_axis_tkeep;
 
-	// Assignings
+	// Reset routing and TX source gates. Payload FIFO reads are blocked while
+	// service/status or mode-switch policy owns the shared FT601 IN path.
 	assign ft601_reset_n_i = ft601_reset_n_ft;
 	assign gpio_rst_req = fpga_reset_i;
 	assign ft_rst_req = fpga_reset_i;
@@ -304,7 +305,7 @@ module top #(
 		.tx_payload_accept_o(tx_payload_accept)
 	);
 
-	// Loopback control
+	// RX router splits host traffic into service commands and loopback payload.
 	rx_stream_router #(
 		.DATA_LEN(DATA_LEN),
 		.BE_LEN(BE_LEN),
@@ -473,7 +474,7 @@ module top #(
 		.fifo_data_o(normal_fifo_wdata)
 	);
 
-	// FT-domain FSM 
+	// FT-domain bus FSM and adapters own FT601 read/write/turnaround phases.
 	ft601_fsm ft601_fsm(
 		.rst_n(ft_rst_n_i),
 		.clk(ft_clk_i),

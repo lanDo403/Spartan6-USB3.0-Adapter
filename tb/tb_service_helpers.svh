@@ -100,6 +100,177 @@
       end
    endtask
 
+   // White-box helper boundary: scenarios should call these named checks instead
+   // of reaching into dut.* directly. These points validate internal state that
+   // is either not observable on FT601 pins or would require perturbing stimulus
+   // with an extra status transaction.
+   task expect_internal_normal_fifo_empty(
+      input [1023:0] ctx
+   );
+      begin
+         if (dut.normal_fifo_empty !== 1'b1) begin
+            $display("ERROR: %0s normal_fifo_empty=%b", ctx, dut.normal_fifo_empty);
+            fail("normal FIFO must be empty");
+         end
+      end
+   endtask
+
+   task expect_internal_loopback_fifo_empty(
+      input [1023:0] ctx
+   );
+      begin
+         if (dut.loopback_fifo_empty !== 1'b1) begin
+            $display("ERROR: %0s loopback_fifo_empty=%b", ctx, dut.loopback_fifo_empty);
+            fail("loopback FIFO must be empty");
+         end
+      end
+   endtask
+
+   task sample_internal_loopback_fifo_empty(
+      input [1023:0] ctx,
+      output reg     empty_o
+   );
+      begin
+         if ((dut.loopback_fifo_empty !== 1'b0) &&
+             (dut.loopback_fifo_empty !== 1'b1)) begin
+            $display("ERROR: %0s loopback_fifo_empty=%b", ctx, dut.loopback_fifo_empty);
+            fail("loopback FIFO empty flag is unknown");
+         end
+         empty_o = dut.loopback_fifo_empty;
+      end
+   endtask
+
+   task expect_internal_loopback_payload_pending(
+      input [1023:0] ctx,
+      output reg     loopback_fifo_empty_o
+   );
+      integer timeout;
+      begin
+         timeout = 0;
+         while ((dut.loopback_fifo_empty !== 1'b0) &&
+                (dut.loopback_fifo_axis_tvalid !== 1'b1) &&
+                (timeout < 512)) begin
+            @(posedge ft_clk);
+            #TB_POSEDGE_SAMPLE_DELAY;
+            timeout = timeout + 1;
+         end
+
+         if ((dut.loopback_fifo_empty !== 1'b0) &&
+             (dut.loopback_fifo_axis_tvalid !== 1'b1))
+            fail("loopback payload did not remain pending before status request");
+
+         sample_internal_loopback_fifo_empty(ctx, loopback_fifo_empty_o);
+      end
+   endtask
+
+   task expect_internal_status_payload_blocking(
+      input [1023:0] ctx
+   );
+      begin
+         if (dut.status_payload_block !== 1'b1) begin
+            $display("ERROR: %0s status_payload_block=%b", ctx, dut.status_payload_block);
+            fail("payload must be blocked while status response is pending");
+         end
+         if (dut.loopback_fifo_ren !== 1'b0) begin
+            $display("ERROR: %0s loopback_fifo_ren=%b", ctx, dut.loopback_fifo_ren);
+            fail("loopback FIFO read must not occur while status window blocks payload");
+         end
+      end
+   endtask
+
+   task expect_internal_mode_switch_commit_after_idle(
+      input         expected_mode,
+      input integer timeout_cycles,
+      input [1023:0] ctx
+   );
+      integer timeout;
+      reg     busy_seen;
+      begin
+         timeout = 0;
+         busy_seen = 1'b0;
+         while ((dut.loopback_mode_ft !== expected_mode) && (timeout < timeout_cycles)) begin
+            @(posedge ft_clk);
+            #TB_POSEDGE_SAMPLE_DELAY;
+            if (dut.mode_switch_busy_ft)
+               busy_seen = 1'b1;
+            if ((dut.loopback_mode_ft === expected_mode) && (dut.fsm_idle_o !== 1'b1))
+               fail("mode committed before FT path became idle");
+            timeout = timeout + 1;
+         end
+
+         if (dut.loopback_mode_ft !== expected_mode) begin
+            $display("ERROR: %0s loopback_mode_ft=%b expected=%b",
+                     ctx, dut.loopback_mode_ft, expected_mode);
+            fail("mode switch did not commit");
+         end
+         if (!busy_seen)
+            fail("mode switch busy state was not observed");
+      end
+   endtask
+
+   task expect_internal_turnaround_before_read(
+      input integer  timeout_cycles,
+      input [1023:0] ctx
+   );
+      integer timeout;
+      reg     turnaround_seen;
+      begin
+         timeout = 0;
+         turnaround_seen = 1'b0;
+         while (((ft_rd_n !== 1'b0) || (ft_oe_n !== 1'b0)) &&
+                (timeout < timeout_cycles)) begin
+            @(posedge ft_clk);
+            #TB_POSEDGE_SAMPLE_DELAY;
+            if (dut.ft601_fsm.state === TB_FSM_TURNAROUND)
+               turnaround_seen = 1'b1;
+            timeout = timeout + 1;
+         end
+
+         if (!turnaround_seen)
+            fail("RX priority must pass through TURNAROUND");
+         if ((ft_rd_n !== 1'b0) || (ft_oe_n !== 1'b0))
+            fail("RX priority request did not reach FT601 read phase");
+      end
+   endtask
+
+   task wait_for_internal_reset_release(
+      input [1023:0] ctx
+   );
+      integer gpio_release_cycles;
+      integer ft_release_cycles;
+      begin
+         gpio_release_cycles = 0;
+         while ((dut.gpio_rst_n_i !== 1'b1) && (gpio_release_cycles < 4)) begin
+            @(posedge gpio_clk);
+            gpio_release_cycles = gpio_release_cycles + 1;
+         end
+         if (dut.gpio_rst_n_i !== 1'b1)
+            fail("gpio reset synchronizer did not release");
+
+         ft_release_cycles = 0;
+         while ((dut.ft_rst_n_i !== 1'b1) && (ft_release_cycles < 4)) begin
+            @(posedge ft_clk);
+            ft_release_cycles = ft_release_cycles + 1;
+         end
+         if (dut.ft_rst_n_i !== 1'b1)
+            fail("FT reset synchronizer did not release");
+      end
+   endtask
+
+   task expect_internal_loopback_mode_sync(
+      input         expected_mode,
+      input [1023:0] ctx
+   );
+      begin
+         expect_loopback_mode(expected_mode, ctx);
+         if (dut.loopback_mode_gpio !== expected_mode) begin
+            $display("ERROR: %0s loopback_mode_gpio=%b expected=%b",
+                     ctx, dut.loopback_mode_gpio, expected_mode);
+            fail("loopback mode did not synchronize into GPIO domain");
+         end
+      end
+   endtask
+
    // A status reply is pending internally but must not leak onto EP82 yet.
    task expect_status_response_pending(
       input [1023:0] ctx

@@ -1,3 +1,2 @@
-// Full regression entrypoint. The shared framework lives in tb_common.svh.
-`define TB_REGRESSION_FULL
+// Official full regression entrypoint. The shared framework lives in tb_common.svh.
 `include "tb_common.svh"

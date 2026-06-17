@@ -1,5 +1,7 @@
 `timescale 1ns / 1ps
 
+// Emits the two-word status response frame on the shared TX stream.
+// Status bits are snapshotted when a request is accepted.
 module status_source #(
 	parameter DATA_LEN = 32,
 	parameter BE_LEN   = 4

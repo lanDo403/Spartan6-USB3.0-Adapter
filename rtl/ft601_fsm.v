@@ -1,5 +1,7 @@
 `timescale 1ns / 1ps
 
+// Coordinates FT601 RX, TX and bus-turnaround phases.
+// The RX/TX adapters own data buffering; this FSM only grants bus direction.
 module ft601_fsm #(
 	parameter DATA_LEN = 32,
 	parameter BE_LEN   = 4
@@ -30,6 +32,7 @@ module ft601_fsm #(
 	output                   idle_o
 );
 
+	// One-hot states make the legal bus phases explicit and easy to assert.
 	localparam ARB         = 6'b000001;
 	localparam TX_PREFETCH = 6'b000010;
 	localparam TX_BURST    = 6'b000100;
@@ -56,6 +59,8 @@ module ft601_fsm #(
 	wire turnaround_phase;
 	wire tx_drive_allowed;
 
+	// RX has priority at arbitration points so host commands are not blocked by
+	// a long TX payload burst.
 	assign rx_start_req = !rxf_n && m_axis_tready_i;
 	assign rx_burst_req = !rxf_n && m_axis_tready_i;
 	assign rx_takeover_req = rx_start_req;
@@ -134,6 +139,7 @@ module ft601_fsm #(
 		.bus_drive_o(tx_drive)
 	);
 
+	// TURNAROUND forces all active-low strobes inactive and tri-states DATA/BE.
 	assign wr_n = turnaround_phase ? 1'b1 : tx_wr_n;
 	assign rd_n = turnaround_phase ? 1'b1 : rx_rd_n;
 	assign oe_n = turnaround_phase ? 1'b1 : rx_oe_n;

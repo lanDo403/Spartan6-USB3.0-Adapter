@@ -1,5 +1,6 @@
 `timescale 1ns / 1ps
 
+// Buffers external GPIO pins and registers data/strobe into the GPIO clock domain.
 module gpio_wrapper #(
 	parameter GPIO_LEN = 8
 )(
@@ -12,11 +13,11 @@ module gpio_wrapper #(
 	output clk_o
     );
 	 
-	// input buffers signals
+	// Input buffers for the board-level GPIO pins.
 	wire [GPIO_LEN-1:0] data_buf;
 	wire strob_buf;	
 	wire clk_buf;
-	// output regs
+	// Registered outputs presented to the packer.
 	reg [GPIO_LEN-1:0] data_rx;
 	reg strob_rx;
 	

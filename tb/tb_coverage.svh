@@ -1099,9 +1099,7 @@
          cov_missing_bins = 0;
          $display("COVERAGE SUMMARY BEGIN");
          tb_cov_require_public_bins();
-`ifndef TB_REGRESSION_MAIN
          tb_cov_require_directed_requirement_bins();
-`endif
          $display("COVERAGE SUMMARY END missing_bins=%0d", cov_missing_bins);
          if (cov_missing_bins != 0)
             fail("functional coverage requirements not met");

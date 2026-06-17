@@ -106,11 +106,10 @@ logic_analyzer/
 │   ├── testbench.v                 # Старый Verilog-стенд; основной regression в tb/
 │   └── callistoS6.ucf              # Ограничения Spartan-6
 ├── tb/                             # SystemVerilog testbench для Vivado XSim
-│   ├── testbench.sv                # Полный regression
-│   ├── testbench_main.sv           # Основные публичные сценарии
-│   ├── testbench_requirements.sv   # Основные сценарии и проверки требований
+│   ├── testbench.sv                # Официальный полный regression
+│   ├── run_tb.py                   # Консольный запуск Vivado XSim regression
 │   ├── tb_pkg.sv                   # Общие константы, типы и helper-функции
-│   ├── tb_assertions.svh           # Assertions и инварианты протоколов
+│   ├── tb_assertions.svh           # Immediate assertions, concurrent SVA и инварианты протоколов
 │   ├── tb_monitors.svh             # Пассивные мониторы шин и stream-линий
 │   ├── tb_scoreboard.svh           # Сравнение ожидаемых и фактических данных
 │   ├── tb_coverage.svh             # Счетчики покрытия и SystemVerilog covergroups
@@ -146,15 +145,11 @@ logic_analyzer/
 
 ## Проверка RTL
 
-Основной тестовый стенд находится в `tb/` и написан на SystemVerilog. Официальная локальная симуляция выполняется в Vivado XSim, а не в Icarus. Точки входа:
+Основной тестовый стенд находится в `tb/` и написан на SystemVerilog. Официальная локальная симуляция выполняется в Vivado XSim, а не в Icarus. Единственная официальная точка входа - `tb/testbench.sv`; она запускает основные публичные сценарии и дополнительные проверки требований FT601 boundary, payload, router, arbiter и mode/status policy.
 
-- `tb/testbench_main.sv` - основные публичные сценарии: reset, normal path, loopback path, service/control.
-- `tb/testbench_requirements.sv` - основные сценарии и дополнительные проверки требований FT601 boundary, payload, router, arbiter и mode/status policy.
-- `tb/testbench.sv` - полный regression.
+Проверки включают scoreboard, постоянные мониторы, immediate assertions, concurrent SVA, обязательные счетчики покрытия и функциональное покрытие SystemVerilog через `covergroup`. `GPIO_CLK` и `CLK` FT601 моделируются как асинхронные домены; при каждом запуске XSim testbench выбирает случайную начальную фазу GPIO-часов относительно FT601-часов. Отчет покрытия формируется через Vivado `xcrg`; текущий full regression закрывает native functional coverage на 100% по 11 covergroup.
 
-Проверки включают scoreboard, постоянные мониторы, assertions, обязательные счетчики покрытия и функциональное покрытие SystemVerilog через `covergroup`. Отчет покрытия формируется через Vivado `xcrg`.
-
-Команды запуска не дублируются в README; актуальная последовательность Vivado XSim приведена в `SPECIFICATION.md`. После запуска в `xsim.log` должен быть итог `TEST PASSED` и `COVERAGE SUMMARY END missing_bins=0`.
+Команды запуска не дублируются в README; актуальная последовательность Vivado XSim для разработчика приведена в `AGENTS.md`. После запуска в `xsim.log` должен быть итог `TEST PASSED`, не должно быть `TEST FAILED` или `ERROR: SVA`, и должен присутствовать `COVERAGE SUMMARY END missing_bins=0`.
 
 Структурная схема тестбенча:
 

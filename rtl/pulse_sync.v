@@ -1,5 +1,6 @@
 `timescale 1ns / 1ps
 
+// Toggle-based pulse synchronizer from src_clk into dst_clk.
 module pulse_sync(
 	input  src_clk,
 	input  src_rst_n,

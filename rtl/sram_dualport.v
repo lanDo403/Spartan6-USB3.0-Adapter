@@ -1,5 +1,6 @@
 `timescale 1ns / 1ps
 
+// Simple inferred dual-port RAM for the normal async FIFO payload storage.
 module sram_dp
 #(
 	parameter DATA_LEN = 32,

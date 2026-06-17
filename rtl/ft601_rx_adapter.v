@@ -1,5 +1,7 @@
 `timescale 1ns / 1ps
 
+// Samples FT601 read data into a small stream buffer.
+// Pending read beats are tracked because DATA/BE arrive after RD_N is issued.
 module ft601_rx_adapter #(
 	parameter DATA_LEN = 32,
 	parameter BE_LEN   = 4
@@ -44,6 +46,8 @@ module ft601_rx_adapter #(
 	wire [2:0] buf_used;
 	wire [STREAM_WORD_LEN-1:0] bus_word;
 
+	// Reserve buffer slots for reads already issued on the FT601 bus but not
+	// yet visible at the stream side.
 	assign bus_word = {bus_keep_i, bus_data_i};
 	assign buf_used = buf_count_ff + {2'b00, bus_rd_hs_d1_ff} +
 	                       {2'b00, bus_rd_hs_d2_ff};
@@ -54,6 +58,7 @@ module ft601_rx_adapter #(
 	assign rd_n_o = !bus_rd_hs;
 	assign oe_n_o = !((start_i && !rxf_n_i && buf_has_space) || bus_rd_hs);
 
+	// Pop accepted stream words first, then append a newly returned bus word.
 	always @(*) begin
 		buf0_next = buf0_ff;
 		buf1_next = buf1_ff;

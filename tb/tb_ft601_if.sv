@@ -1,6 +1,7 @@
 `ifndef TB_FT601_IF_SV
 `define TB_FT601_IF_SV
 
+// Passive FT601 bus view plus wrapper tri-state intent for boundary checks.
 interface tb_ft601_if #(
    parameter int DATA_LEN = 32,
    parameter int BE_LEN   = 4

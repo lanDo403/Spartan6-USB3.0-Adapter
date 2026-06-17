@@ -102,6 +102,287 @@
       end
    endfunction
 
+   // Native SVA layer. These concurrent properties mirror the always-on
+   // procedural checks below, but express the temporal protocol contract directly.
+   sequence s_ft601_write_active;
+      ft601_mon.wr_n === 1'b0;
+   endsequence
+
+   sequence s_ft601_read_active;
+      (ft601_mon.oe_n === 1'b0) || (ft601_mon.rd_n === 1'b0);
+   endsequence
+
+   sequence s_ft601_reset_low;
+      ft_reset_n === 1'b0;
+   endsequence
+
+   // AXIS-like streams: payload must stay stable while valid is backpressured.
+   property p_ft_rx_axis_hold_when_stalled;
+      @(negedge ft_clk) disable iff (dut.ft_rst_n_i !== 1'b1)
+         (ft_rx_axis_mon.valid && !ft_rx_axis_mon.ready) |=>
+            (ft_rx_axis_mon.valid &&
+             (ft_rx_axis_mon.data === $past(ft_rx_axis_mon.data)) &&
+             (ft_rx_axis_mon.keep === $past(ft_rx_axis_mon.keep)));
+   endproperty
+
+   property p_normal_axis_data_hold_when_stalled;
+      @(negedge ft_clk) disable iff (dut.ft_rst_n_i !== 1'b1)
+         (normal_axis_mon.valid && !normal_axis_mon.ready) |=>
+            (normal_axis_mon.ready ||
+             ((normal_axis_mon.data === $past(normal_axis_mon.data)) &&
+              (normal_axis_mon.keep === $past(normal_axis_mon.keep))));
+   endproperty
+
+   property p_loopback_payload_axis_hold_when_stalled;
+      @(negedge ft_clk) disable iff (dut.ft_rst_n_i !== 1'b1)
+         (loopback_payload_axis_mon.valid && !loopback_payload_axis_mon.ready) |=>
+            (loopback_payload_axis_mon.valid &&
+             (loopback_payload_axis_mon.data === $past(loopback_payload_axis_mon.data)) &&
+             (loopback_payload_axis_mon.keep === $past(loopback_payload_axis_mon.keep)));
+   endproperty
+
+   property p_loopback_axis_hold_when_stalled;
+      @(negedge ft_clk) disable iff (dut.ft_rst_n_i !== 1'b1)
+         (loopback_axis_mon.valid && !loopback_axis_mon.ready) |=>
+            (loopback_axis_mon.valid &&
+             (loopback_axis_mon.data === $past(loopback_axis_mon.data)) &&
+             (loopback_axis_mon.keep === $past(loopback_axis_mon.keep)));
+   endproperty
+
+   property p_status_axis_hold_when_stalled;
+      @(negedge ft_clk) disable iff (dut.ft_rst_n_i !== 1'b1)
+         (status_axis_mon.valid && !status_axis_mon.ready) |=>
+            (status_axis_mon.valid &&
+             (status_axis_mon.data === $past(status_axis_mon.data)) &&
+             (status_axis_mon.keep === $past(status_axis_mon.keep)));
+   endproperty
+
+   property p_tx_axis_hold_when_stalled;
+      @(negedge ft_clk) disable iff (dut.ft_rst_n_i !== 1'b1)
+         (tx_axis_mon.valid && !tx_axis_mon.ready) |=>
+            (tx_axis_mon.valid &&
+             (tx_axis_mon.data === $past(tx_axis_mon.data)) &&
+             (tx_axis_mon.keep === $past(tx_axis_mon.keep)));
+   endproperty
+
+   // FT601 boundary: no read/write overlap and correct tri-state direction.
+   property p_ft601_no_direction_conflict;
+      @(posedge ft_clk) disable iff (dut.ft_rst_n_i !== 1'b1)
+         s_ft601_write_active |-> ((ft601_mon.oe_n === 1'b1) &&
+                                   (ft601_mon.rd_n === 1'b1));
+   endproperty
+
+   property p_ft601_write_only_when_txe_open;
+      @(posedge ft_clk) disable iff (dut.ft_rst_n_i !== 1'b1)
+         ($past(dut.ft_rst_n_i === 1'b1) &&
+          ($past(ft601_mon.wr_n) === 1'b1) &&
+          (ft601_mon.wr_n === 1'b0)) |->
+            (dut.ft601_wrapper.txe_n_ff === 1'b0);
+   endproperty
+
+   property p_ft601_read_only_when_rxf_open;
+      @(posedge ft_clk) disable iff (dut.ft_rst_n_i !== 1'b1)
+         ($past(dut.ft_rst_n_i === 1'b1) &&
+          ((($past(ft601_mon.rd_n) === 1'b1) && (ft601_mon.rd_n === 1'b0)) ||
+           (($past(ft601_mon.oe_n) === 1'b1) && (ft601_mon.oe_n === 1'b0)))) |->
+            (dut.ft601_wrapper.rxf_n_ff === 1'b0);
+   endproperty
+
+   property p_ft601_bus_tristate_on_read;
+      @(posedge ft_clk) disable iff (dut.ft_rst_n_i !== 1'b1)
+         s_ft601_read_active |-> ((ft601_mon.data_t === {DATA_LEN{1'b1}}) &&
+                                  (ft601_mon.be_t === {BE_LEN{1'b1}}));
+   endproperty
+
+   property p_ft601_bus_drive_on_write;
+      @(posedge ft_clk) disable iff (dut.ft_rst_n_i !== 1'b1)
+         s_ft601_write_active |-> ((ft601_mon.data_t === {DATA_LEN{1'b0}}) &&
+                                   (ft601_mon.be_t === {BE_LEN{1'b0}}));
+   endproperty
+
+   // FT601 FSM: only documented phases and transitions are accepted.
+   property p_ft601_fsm_legal_state;
+      @(posedge ft_clk) disable iff (dut.ft_rst_n_i !== 1'b1)
+         tb_ft601_fsm_state_legal(dut.ft601_fsm.state);
+   endproperty
+
+   property p_ft601_fsm_legal_transition;
+      @(posedge ft_clk) disable iff (dut.ft_rst_n_i !== 1'b1)
+         $past(dut.ft_rst_n_i === 1'b1) |->
+            tb_ft601_fsm_transition_legal($past(dut.ft601_fsm.state),
+                                          dut.ft601_fsm.state);
+   endproperty
+
+   property p_ft601_rx_takeover_uses_turnaround;
+      @(posedge ft_clk) disable iff (dut.ft_rst_n_i !== 1'b1)
+         (((dut.ft601_fsm.state === TB_FSM_TX_PREFETCH) ||
+           (dut.ft601_fsm.state === TB_FSM_TX_BURST)) &&
+          (dut.ft601_fsm.rx_takeover_req === 1'b1)) |=>
+            (dut.ft601_fsm.state === TB_FSM_TURNAROUND);
+   endproperty
+
+   // Service/arbiter policy: status priority and payload hold rules.
+   property p_arbiter_status_priority;
+      @(posedge ft_clk) disable iff (dut.ft_rst_n_i !== 1'b1)
+         (dut.status_frame_active === 1'b1) |->
+            ((dut.axis_tx_arbiter.status_sel === 1'b1) &&
+             (dut.axis_tx_arbiter.loopback_sel === 1'b0) &&
+             (dut.axis_tx_arbiter.normal_sel === 1'b0));
+   endproperty
+
+   property p_arbiter_output_hold_when_stalled;
+      @(negedge ft_clk) disable iff (dut.ft_rst_n_i !== 1'b1)
+         (tx_axis_mon.valid && !tx_axis_mon.ready) |=>
+            (tx_axis_mon.valid &&
+             (tx_axis_mon.data === $past(tx_axis_mon.data)) &&
+             (tx_axis_mon.keep === $past(tx_axis_mon.keep)));
+   endproperty
+
+   property p_service_payload_block_policy;
+      @(posedge ft_clk) disable iff (dut.ft_rst_n_i !== 1'b1)
+         dut.status_payload_block ===
+            (dut.mode_switch_busy_ft ||
+             dut.status_req ||
+             dut.status_frame_active ||
+             dut.service_status_policy.status_payload_hold_ff);
+   endproperty
+
+   property p_service_hold_release_is_safe;
+      @(posedge ft_clk) disable iff (dut.ft_rst_n_i !== 1'b1)
+         ($past(dut.service_status_policy.status_payload_hold_ff === 1'b1) &&
+          (dut.service_status_policy.status_payload_hold_ff === 1'b0)) |->
+            (($past(dut.service_status_policy.status_txe_low_seen_ff) === 1'b1) &&
+             ($past(dut.status_req) === 1'b0) &&
+             ($past(dut.status_frame_active) === 1'b0) &&
+             ($past(dut.fsm_idle_o) === 1'b1));
+   endproperty
+
+   // RX router: command framing and loopback payload routing stay exclusive.
+   property p_router_cmd_magic_waits_opcode;
+      @(negedge ft_clk) disable iff (dut.ft_rst_n_i !== 1'b1)
+         (dut.rx_stream_router.s_axis_hs &&
+          dut.rx_stream_router.cmd_magic_match) |=>
+            (dut.rx_stream_router.cmd_wait_opcode_ff === 1'b1);
+   endproperty
+
+   property p_router_full_opcode_generates_event;
+      @(negedge ft_clk) disable iff (dut.ft_rst_n_i !== 1'b1)
+         (dut.rx_stream_router.s_axis_hs &&
+          dut.rx_stream_router.cmd_wait_opcode_ff &&
+          dut.rx_stream_router.s_axis_full_keep) |=>
+            (dut.cmd_event_valid === 1'b1);
+   endproperty
+
+   property p_router_bad_opcode_generates_diagnostic;
+      @(negedge ft_clk) disable iff (dut.ft_rst_n_i !== 1'b1)
+         (dut.rx_stream_router.s_axis_hs &&
+          dut.rx_stream_router.cmd_wait_opcode_ff &&
+          !dut.rx_stream_router.s_axis_full_keep) |=>
+            (dut.service_frame_error_pulse === 1'b1);
+   endproperty
+
+   property p_router_payload_only_in_loopback;
+      @(posedge ft_clk) disable iff (dut.ft_rst_n_i !== 1'b1)
+         (dut.loopback_fifo_wen === 1'b1) |->
+            ((dut.loopback_mode_ft === 1'b1) &&
+             (dut.loopback_payload_tvalid === 1'b1) &&
+             (dut.loopback_payload_tready === 1'b1));
+   endproperty
+
+   // CMD_FT601_RESET affects only the external RESET_N pulse.
+   property p_cmd_ft601_reset_exact_two_cycles;
+      @(posedge ft_clk) disable iff (dut.ft_rst_n_i !== 1'b1)
+         $rose(dut.cmd_decoder.ft601_reset_pipe_ff[1]) |->
+            (s_ft601_reset_low ##1 s_ft601_reset_low ##1 (ft_reset_n === 1'b1));
+   endproperty
+
+   property p_cmd_ft601_reset_not_internal_reset;
+      @(posedge ft_clk) disable iff (dut.ft_rst_n_i !== 1'b1)
+         s_ft601_reset_low |-> (dut.ft_rst_n_i === 1'b1);
+   endproperty
+
+   property p_cmd_ft601_reset_preserves_mode;
+      @(posedge ft_clk) disable iff (dut.ft_rst_n_i !== 1'b1)
+         ((ft_reset_n === 1'b0) && ($past(ft_reset_n) === 1'b0)) |->
+            (dut.loopback_mode_ft === $past(dut.loopback_mode_ft));
+   endproperty
+
+   // SVA failures call fail(), so they are visible in the regression result.
+   a_sva_ft_rx_axis_hold: assert property (p_ft_rx_axis_hold_when_stalled)
+      else fail("SVA REQ-AXIS-001 FT RX AXIS changed while stalled");
+
+   a_sva_normal_axis_hold: assert property (p_normal_axis_data_hold_when_stalled)
+      else fail("SVA REQ-AXIS-001 normal AXIS data changed while stalled");
+
+   a_sva_loopback_payload_axis_hold: assert property (p_loopback_payload_axis_hold_when_stalled)
+      else fail("SVA REQ-AXIS-001 loopback payload AXIS changed while stalled");
+
+   a_sva_loopback_axis_hold: assert property (p_loopback_axis_hold_when_stalled)
+      else fail("SVA REQ-AXIS-001 loopback AXIS changed while stalled");
+
+   a_sva_status_axis_hold: assert property (p_status_axis_hold_when_stalled)
+      else fail("SVA REQ-AXIS-001 status AXIS changed while stalled");
+
+   a_sva_tx_axis_hold: assert property (p_tx_axis_hold_when_stalled)
+      else fail("SVA REQ-AXIS-001 TX AXIS changed while stalled");
+
+   a_sva_ft601_no_direction_conflict: assert property (p_ft601_no_direction_conflict)
+      else fail("SVA REQ-FT-001 FT601 write/read directions overlapped");
+
+   a_sva_ft601_write_only_when_txe_open: assert property (p_ft601_write_only_when_txe_open)
+      else fail("SVA REQ-FT-001 WR_N started while registered TXE_N is closed");
+
+   a_sva_ft601_read_only_when_rxf_open: assert property (p_ft601_read_only_when_rxf_open)
+      else fail("SVA REQ-FT-001 RD_N/OE_N started while registered RXF_N is closed");
+
+   a_sva_ft601_bus_tristate_on_read: assert property (p_ft601_bus_tristate_on_read)
+      else fail("SVA REQ-FT-001 FPGA drives FT601 bus during read");
+
+   a_sva_ft601_bus_drive_on_write: assert property (p_ft601_bus_drive_on_write)
+      else fail("SVA REQ-FT-001 FPGA tri-states FT601 bus during write");
+
+   a_sva_ft601_fsm_legal_state: assert property (p_ft601_fsm_legal_state)
+      else fail("SVA REQ-FSM-001 ft601_fsm entered illegal state");
+
+   a_sva_ft601_fsm_legal_transition: assert property (p_ft601_fsm_legal_transition)
+      else fail("SVA REQ-FSM-001 ft601_fsm used illegal transition");
+
+   a_sva_ft601_rx_takeover_uses_turnaround: assert property (p_ft601_rx_takeover_uses_turnaround)
+      else fail("SVA REQ-FT-003 RX takeover did not enter TURNAROUND");
+
+   a_sva_arbiter_status_priority: assert property (p_arbiter_status_priority)
+      else fail("SVA REQ-ARB-001 status source lost arbiter priority");
+
+   a_sva_arbiter_output_hold_when_stalled: assert property (p_arbiter_output_hold_when_stalled)
+      else fail("SVA REQ-ARB-001 arbiter output changed while stalled");
+
+   a_sva_service_payload_block_policy: assert property (p_service_payload_block_policy)
+      else fail("SVA REQ-POL-001 payload block policy mismatch");
+
+   a_sva_service_hold_release_is_safe: assert property (p_service_hold_release_is_safe)
+      else fail("SVA REQ-STS-002 status hold released before safe drain point");
+
+   a_sva_router_cmd_magic_waits_opcode: assert property (p_router_cmd_magic_waits_opcode)
+      else fail("SVA REQ-SVC-001 service magic did not arm opcode wait");
+
+   a_sva_router_full_opcode_generates_event: assert property (p_router_full_opcode_generates_event)
+      else fail("SVA REQ-SVC-001 full-keep opcode did not generate command event");
+
+   a_sva_router_bad_opcode_generates_diagnostic: assert property (p_router_bad_opcode_generates_diagnostic)
+      else fail("SVA REQ-SVC-002 malformed opcode did not generate diagnostic pulse");
+
+   a_sva_router_payload_only_in_loopback: assert property (p_router_payload_only_in_loopback)
+      else fail("SVA REQ-LB-002 payload entered loopback FIFO outside loopback handshake");
+
+   a_sva_cmd_ft601_reset_exact_two_cycles: assert property (p_cmd_ft601_reset_exact_two_cycles)
+      else fail("SVA REQ-RST-002 CMD_FT601_RESET did not create exact two-cycle RESET_N pulse");
+
+   a_sva_cmd_ft601_reset_not_internal_reset: assert property (p_cmd_ft601_reset_not_internal_reset)
+      else fail("SVA REQ-RST-002 CMD_FT601_RESET affected internal FT reset");
+
+   a_sva_cmd_ft601_reset_preserves_mode: assert property (p_cmd_ft601_reset_preserves_mode)
+      else fail("SVA REQ-RST-002 CMD_FT601_RESET changed loopback mode");
+
    task automatic tb_assert_now(
       input        condition,
       input [1023:0] message
@@ -111,6 +392,7 @@
       end
    endtask
 
+   // Shared immediate check for AXIS-like stability after a stalled cycle.
    task automatic tb_assert_axis_stall_stable(
       input [1023:0]       valid_message,
       input [1023:0]       data_message,
@@ -134,6 +416,7 @@
       end
    endtask
 
+   // Portable immediate assertions for stream stability; active in all simulators.
    task automatic tb_assert_axis_invariants;
       begin
          tb_assert_axis_stall_stable(

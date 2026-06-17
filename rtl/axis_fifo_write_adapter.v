@@ -1,5 +1,7 @@
 `timescale 1ns / 1ps
 
+// Writes one valid/ready stream beat into a FIFO as {data, keep}.
+// Empty keep masks are dropped, so zero-byte words never enter the FIFO.
 module axis_fifo_write_adapter #(
 	parameter DATA_LEN = 32,
 	parameter KEEP_LEN = 4,

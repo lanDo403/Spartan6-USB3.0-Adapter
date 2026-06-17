@@ -1,5 +1,7 @@
 `timescale 1ns / 1ps
 
+// Single-clock FIFO for loopback payload in the FT601 clock domain.
+// It stores the packed {DATA, BE} word produced by the RX router.
 module loopback_fifo #(
 	parameter DATA_LEN = 32,
 	parameter DEPTH = 8192,

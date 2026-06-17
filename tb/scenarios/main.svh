@@ -1,3 +1,4 @@
+   // Public reset smoke: pins idle, buses released, normal mode selected.
    task run_reset_boot_normal;
       begin
          scenario_start("reset_boot_normal");
@@ -20,16 +21,15 @@
             fail("DATA bus must resolve to high-Z after reset_boot_normal");
          if (ft_be_bus !== {BE_LEN{1'bz}})
             fail("BE bus must resolve to high-Z after reset_boot_normal");
-         if (dut.loopback_mode_ft !== 1'b0)
-            fail("reset_boot_normal must start in normal mode");
+         expect_loopback_mode(1'b0, "reset_boot_normal must start in normal mode");
          scenario_end("reset_boot_normal");
       end
    endtask
 
+   // Normal path: GPIO bytes are packed and sent as ordered FT601 TX words.
    task test_gpio_mode;
       begin
-         if (dut.loopback_mode_ft !== 1'b0)
-            fail("GPIO-mode test started while loopback mode is active");
+         expect_loopback_mode(1'b0, "GPIO-mode test start");
          if (TB_VERBOSE_SCENARIO)
             $display("INFO: Starting GPIO to FT601 mode test");
 
@@ -53,13 +53,13 @@
             fail("RD_N became active in GPIO TX-only mode");
          if (oe_active_cycles_n != 0)
             fail("OE_N became active in GPIO TX-only mode");
-         if (dut.normal_fifo_empty !== 1'b1)
-            fail("TX FIFO is not empty after GPIO-mode transmission");
+         expect_internal_normal_fifo_empty("GPIO-mode transmission");
          if (TB_VERBOSE_SCENARIO)
             $display("INFO: GPIO mode test passed, transmitted %0d words", tx_words_n);
       end
    endtask
 
+   // Main scenario wrapper for the GPIO-to-FT601 datapath.
    task run_normal_path;
       begin
          scenario_start("normal_path");
@@ -71,10 +71,9 @@
       end
    endtask
 
+   // FPGA_RESET must reset internal domains without pulsing FT601 RESET_N.
    task pulse_fpga_reset_only;
       integer n;
-      integer gpio_release_cycles;
-      integer ft_release_cycles;
       begin
          if (TB_VERBOSE_SCENARIO)
             $display("INFO: Pulsing FPGA_RESET to exit loopback mode");
@@ -103,39 +102,22 @@
          if (ft_reset_n !== 1'b1)
             fail("RESET_N output must stay high after FPGA_RESET pulse");
 
-         gpio_release_cycles = 0;
-         while ((dut.gpio_rst_n_i !== 1'b1) && (gpio_release_cycles < 4)) begin
-            @(posedge gpio_clk);
-            gpio_release_cycles = gpio_release_cycles + 1;
-         end
-         if (dut.gpio_rst_n_i !== 1'b1)
-            fail("gpio_rst_n_i did not release after FPGA_RESET pulse");
-
-         ft_release_cycles = 0;
-         while ((dut.ft_rst_n_i !== 1'b1) && (ft_release_cycles < 4)) begin
-            @(posedge ft_clk);
-            ft_release_cycles = ft_release_cycles + 1;
-         end
-         if (dut.ft_rst_n_i !== 1'b1)
-            fail("ft_rst_n_i did not release after FPGA_RESET pulse");
+         wait_for_internal_reset_release("FPGA_RESET pulse");
 
          wait_gpio_cycles(4);
          wait_ft_cycles(4);
 
-         if (dut.loopback_mode_ft !== 1'b0)
-            fail("loopback_mode_ft must return to 0 after FPGA_RESET");
-         if (dut.loopback_mode_gpio !== 1'b0)
-            fail("loopback mode must clear in GPIO domain after FPGA_RESET");
+         expect_internal_loopback_mode_sync(1'b0, "FPGA_RESET pulse");
 
          if (TB_VERBOSE_SCENARIO)
             $display("INFO: FPGA_RESET returned the design to normal mode");
       end
    endtask
 
+   // Loopback path: host RX payload returns on the shared FT601 TX endpoint.
    task test_loopback_mode;
       begin
-         if (dut.loopback_mode_ft !== 1'b1)
-            fail("Loopback-mode test started while loopback mode is not active");
+         expect_loopback_mode(1'b1, "Loopback-mode test start");
          if (TB_VERBOSE_SCENARIO)
             $display("INFO: Starting FT601 loopback mode test");
 
@@ -149,8 +131,7 @@
          if (rx_words_n !== 0)
             fail("control frame must not increment loopback RX payload counter");
          expect_known_command_accepted("loopback control frame");
-         if (dut.loopback_fifo_empty !== 1'b1)
-            fail("control frame must not leave data inside loopback FIFO");
+         expect_internal_loopback_fifo_empty("loopback control frame");
          wait_gpio_cycles(4);
 
          drive_ft_loopback_stream();
@@ -177,18 +158,17 @@
             fail("RD_N never became active in loopback mode");
          if (oe_active_cycles_n == 0)
             fail("OE_N never became active in loopback mode");
-         if (dut.loopback_fifo_empty !== 1'b1)
-            fail("Loopback FIFO is not empty after loopback transmission");
+         expect_internal_loopback_fifo_empty("loopback transmission");
          rx_payload_check_en = 1'b0;
          if (TB_VERBOSE_SCENARIO)
             $display("INFO: Loopback mode test passed, looped back %0d words", tx_words_n);
       end
    endtask
 
+   // Compact loopback transfer used after mode/reset transitions.
    task short_loopback_payload_check(input integer word_count);
       begin
-         if (dut.loopback_mode_ft !== 1'b1)
-            fail("short loopback payload check requires loopback mode");
+         expect_loopback_mode(1'b1, "short loopback payload check");
 
          clear_monitors();
          ft_set_txe_now(1'b1);
@@ -208,6 +188,7 @@
       end
    endtask
 
+   // Main scenario wrapper for loopback enable, payload return, and reset exit.
    task run_loopback_path;
       begin
          scenario_start("loopback_path");
@@ -225,6 +206,7 @@
       end
    endtask
 
+   // CMD_FT601_RESET creates only the external FT601 reset pulse.
    task check_ft601_reset_command_pulse(input expected_loopback_mode);
       begin
          clear_monitors();
@@ -239,6 +221,7 @@
       end
    endtask
 
+   // Service diagnostics are sticky until the matching clear command arrives.
    task check_service_error_clear;
       begin
          clear_monitors();
@@ -257,6 +240,7 @@
       end
    endtask
 
+   // FT601 reset command must not clear service diagnostics.
    task check_ft601_reset_preserves_service_error;
       begin
          clear_monitors();
@@ -270,10 +254,10 @@
       end
    endtask
 
+   // FT601 reset command must not drop normal payload already queued for TX.
    task check_ft601_reset_preserves_pending_normal_payload;
       begin
-         if (dut.loopback_mode_ft !== 1'b0)
-            fail("pending normal payload reset check requires normal mode");
+         expect_loopback_mode(1'b0, "pending normal payload reset check");
 
          build_counter_expected_words(1);
          clear_monitors();
@@ -295,6 +279,7 @@
       end
    endtask
 
+   // Main scenario wrapper for status, diagnostics, mode control, and reset command.
    task run_service_control;
       begin
          scenario_start("service_control");

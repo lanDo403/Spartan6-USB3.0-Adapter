@@ -1,5 +1,7 @@
 `timescale 1ns / 1ps
 
+// Applies decoded service opcodes from rx_stream_router.
+// Protocol framing is handled upstream; this module owns side effects.
 module cmd_decoder #(
 	parameter DATA_LEN = 32,
 	parameter BE_LEN = 4,

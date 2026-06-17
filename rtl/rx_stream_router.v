@@ -1,5 +1,7 @@
 `timescale 1ns / 1ps
 
+// Demuxes FT601 RX stream words into service commands or loopback payload.
+// A word is consumed by exactly one path; service frames are never echoed.
 module rx_stream_router #(
 	parameter DATA_LEN = 32,
 	parameter BE_LEN   = 4,

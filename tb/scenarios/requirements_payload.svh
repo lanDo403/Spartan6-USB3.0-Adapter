@@ -1,3 +1,4 @@
+   // Payload robustness: long gapped loopback bursts preserve order and byte enables.
    task run_long_gapped_loopback_payload;
       integer long_count;
       begin
