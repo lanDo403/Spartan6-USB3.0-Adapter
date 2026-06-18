@@ -19,6 +19,35 @@ interface tb_ft601_if #(
    // White-box wrapper intent for resolved inout tri-state checks.
    wire [DATA_LEN-1:0] data_t;
    wire [BE_LEN-1:0]   be_t;
+
+   clocking monitor_cb @(posedge clk);
+      default input #0 output #0;
+      input reset_n;
+      input txe_n;
+      input rxf_n;
+      input oe_n;
+      input wr_n;
+      input rd_n;
+      input data;
+      input be;
+      input data_t;
+      input be_t;
+   endclocking
+
+   modport passive (
+      clocking monitor_cb,
+      input clk,
+      input reset_n,
+      input txe_n,
+      input rxf_n,
+      input oe_n,
+      input wr_n,
+      input rd_n,
+      input data,
+      input be,
+      input data_t,
+      input be_t
+   );
 endinterface
 
 `endif

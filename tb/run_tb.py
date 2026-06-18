@@ -251,13 +251,17 @@ def show_menu(repo_root, args):
         choice = input("Select: ").strip()
 
         if choice == "1":
-            return run_full_regression(repo_root, args.vivado, args.seed, args.keep, False)
+            run_full_regression(repo_root, args.vivado, args.seed, args.keep, False)
+            continue
         if choice == "2":
-            return run_full_regression(repo_root, args.vivado, args.seed, args.keep, True)
+            run_full_regression(repo_root, args.vivado, args.seed, args.keep, True)
+            continue
         if choice == "3":
-            return open_latest_log(repo_root)
+            open_latest_log(repo_root)
+            continue
         if choice == "4":
-            return clean_runner_dirs(repo_root)
+            clean_runner_dirs(repo_root)
+            continue
         if choice == "0":
             return 0
 

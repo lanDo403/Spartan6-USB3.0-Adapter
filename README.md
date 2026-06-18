@@ -103,7 +103,6 @@ logic_analyzer/
 │   ├── axis_fifo_read_adapter.v    # Адаптер чтения FIFO в stream-формате
 │   ├── async_fifo.v                # Асинхронная FIFO для normal path
 │   ├── loopback_fifo.v             # FIFO для loopback path
-│   ├── testbench.v                 # Старый Verilog-стенд; основной regression в tb/
 │   └── callistoS6.ucf              # Ограничения Spartan-6
 ├── tb/                             # SystemVerilog testbench для Vivado XSim
 │   ├── testbench.sv                # Официальный полный regression
@@ -147,7 +146,7 @@ logic_analyzer/
 
 Основной тестовый стенд находится в `tb/` и написан на SystemVerilog. Официальная локальная симуляция выполняется в Vivado XSim. Единственная официальная точка входа - `tb/testbench.sv`; она запускает основные публичные сценарии и дополнительные проверки требований FT601 boundary, payload, router, arbiter и mode/status policy.
 
-Проверки включают scoreboard, постоянные мониторы, immediate assertions, concurrent SVA, обязательные счетчики покрытия и функциональное покрытие SystemVerilog через `covergroup`. `GPIO_CLK` и `CLK` FT601 моделируются как асинхронные домены; при каждом запуске XSim testbench выбирает случайную начальную фазу GPIO-часов относительно FT601-часов. Отчет покрытия формируется через Vivado `xcrg`; текущий full regression закрывает native functional coverage на 100% по 11 covergroup.
+Проверки включают scoreboard, постоянные мониторы, immediate assertions, concurrent SVA, обязательные счетчики покрытия и функциональное покрытие SystemVerilog через `covergroup`. Пассивные интерфейсы `tb_axis_if.sv` и `tb_ft601_if.sv` используют `clocking`/`modport` для синхронного monitor sampling. `GPIO_CLK` и `CLK` FT601 моделируются как асинхронные домены; при каждом запуске XSim testbench выбирает случайную начальную фазу GPIO-часов относительно FT601-часов. Отчет покрытия формируется через Vivado `xcrg`; текущий full regression закрывает native functional coverage на 100% по 11 covergroup.
 
 Структурная схема тестбенча:
 

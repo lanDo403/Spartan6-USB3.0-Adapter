@@ -157,7 +157,7 @@ RX path работает через `ft601_rx_adapter.v`. FSM активируе
 
 ## Проверка
 
-Основной самопроверочный стенд находится в `tb/` и написан на SystemVerilog. Официальный локальный симулятор - Vivado XSim. `rtl/testbench.v` остается старым Verilog-стендом и не является основным regression flow.
+Основной самопроверочный стенд находится в `tb/` и написан на SystemVerilog. Официальный локальный симулятор - Vivado XSim. Старый Verilog-стенд из `rtl/` удален; regression flow поддерживается только через `tb/testbench.sv`.
 
 Тестовый стенд моделирует два независимых clock domain: `GPIO_CLK` для GPIO/write path и `CLK`/`ft_clk` для FT601/read/service path. При запуске XSim начальная фаза `GPIO_CLK` относительно `ft_clk` выбирается случайно, чтобы не привязывать проверки к одному фиксированному взаимному положению фронтов. Для воспроизводимости можно задать plusargs `+TB_RANDOM_SEED=<seed>` и `+TB_GPIO_PHASE_NS=<0..9>`.
 
@@ -173,8 +173,8 @@ RX path работает через `ft601_rx_adapter.v`. FSM активируе
 | Файл | Назначение |
 | --- | --- |
 | `tb/tb_pkg.sv` | Общие константы, типы, коды команд, magic-слова и helper-функции. |
-| `tb/tb_ft601_if.sv` | SystemVerilog interface для внешней шины FT601. |
-| `tb/tb_axis_if.sv` | SystemVerilog interface для внутренних stream-линий. |
+| `tb/tb_ft601_if.sv` | SystemVerilog interface для внешней шины FT601 с `clocking`/`modport` для пассивного мониторинга. |
+| `tb/tb_axis_if.sv` | SystemVerilog interface для внутренних stream-линий с `clocking`/`modport` для пассивного мониторинга. |
 | `tb/tb_common.svh` | Общие задачи подготовки стенда, генерация асинхронных clock domains и базовые операции сценариев. |
 | `tb/tb_ft601_driver.svh` | Драйвер модели FT601 для чтения и записи 32-битных слов. |
 | `tb/tb_gpio_driver.svh` | Драйвер GPIO-входа для normal path. |
@@ -188,9 +188,26 @@ RX path работает через `ft601_rx_adapter.v`. FSM активируе
 
 Активные проверки являются проверками требований из этой спецификации; старые сценарии воспроизведения багов, host-log sequences и AXIS_PLAN stage diagnostics не входят в официальный regression.
 
-Постоянные мониторы и SVA работают независимо от сценария. Они проверяют, что `WR_N` и `OE_N` не активны одновременно, старт записи происходит только при открытом зарегистрированном `TXE_N`, старт чтения происходит только при открытом зарегистрированном `RXF_N`, `DATA/BE` не конфликтуют на общей шине, а внутренние stream-линии удерживают `valid/data/keep` при `valid && !ready`. Для управляющих FSM также проверяются допустимые состояния, допустимые переходы и ключевые флаги, которые напрямую разрешают или блокируют смену состояния, включая арбитраж TX-источников. Проверки `RXF_N/TXE_N` относятся к старту доступа: после закрытия флага уже начатая FT601 read/write-фаза может штатно завершить release tail. Фиксированная latency FTDI reference-дизайна не является pass/fail критерием.
+Постоянные мониторы и SVA работают независимо от сценария. Пассивный monitor sampling выполняется через `clocking` blocks в `tb_axis_if.sv` и `tb_ft601_if.sv`, чтобы чтение шин и stream-линий было синхронным и не зависело от порядка procedural blocks. Мониторы проверяют, что `WR_N` и `OE_N` не активны одновременно, старт записи происходит только при открытом зарегистрированном `TXE_N`, старт чтения происходит только при открытом зарегистрированном `RXF_N`, `DATA/BE` не конфликтуют на общей шине, а внутренние stream-линии удерживают `valid/data/keep` при `valid && !ready`. Для управляющих FSM также проверяются допустимые состояния, допустимые переходы и ключевые флаги, которые напрямую разрешают или блокируют смену состояния, включая арбитраж TX-источников. Проверки `RXF_N/TXE_N` относятся к старту доступа: после закрытия флага уже начатая FT601 read/write-фаза может штатно завершить release tail. Фиксированная latency FTDI reference-дизайна не является pass/fail критерием.
 
 Pass/fail задают scoreboard, assertions/SVA и обязательные счетчики покрытия. Любое нарушение SVA вызывает `fail(...)` и считается regression failure. Функциональное покрытие SystemVerilog включается через `TB_HAS_SV_COVERGROUP`; модель `covergroup` описывает bins на уровне требований и формирует отчет Vivado `xcrg`. Текущий full regression закрывает native functional coverage на 100%: `Score=100`, `Inst Score=100`, 11 covergroup, `COVERAGE SUMMARY END missing_bins=0`. Code coverage RTL этим числом не измеряется и должен собираться отдельным XSim flow с `-cc_type`.
+
+### Контрольные сигналы waveform
+
+Минимальный набор сигналов для просмотра:
+
+| Группа | Сигналы | Что проверять |
+| --- | --- | --- |
+| Reset/clocks | `gpio_clk`, `ft_clk`, `fpga_reset`, `dut.gpio_rst_n_i`, `dut.ft_rst_n_i`, `ft_reset_n` | `FPGA_RESET` сбрасывает оба домена; `RESET_N` FT601 меняется только по `CMD_FT601_RESET`. |
+| FT601 bus | `ft_txe_n`, `ft_rxf_n`, `ft_oe_n`, `ft_rd_n`, `ft_wr_n`, `ft_data_bus`, `ft_be_bus`, `dut.ft601_wrapper.data_t_o_ff`, `dut.ft601_wrapper.be_t_o_ff` | Нет одновременного read/write; при write FPGA управляет `DATA/BE`, при read шина tri-state; доступ стартует только при открытом registered `TXE_N/RXF_N`. |
+| FT601 FSM | `dut.ft601_fsm.state`, `dut.ft601_fsm.tx_start_req`, `dut.ft601_fsm.rx_start_req`, `dut.ft601_fsm.rx_takeover_req`, `dut.fsm_idle_o`, `dut.drive_tx` | Переходы идут через разрешенные состояния; при смене направления есть `TURNAROUND`. |
+| Stream handshakes | `dut.ft_rx_axis_*`, `dut.normal_axis_*`, `dut.loopback_payload_*`, `dut.loopback_axis_*`, `dut.status_axis_*`, `dut.tx_axis_*` | При `valid && !ready` значения `data/keep` удерживаются до handshake. |
+| Router/service | `dut.rx_stream_router.cmd_wait_opcode_ff`, `dut.cmd_event_valid`, `dut.cmd_word`, `dut.service_frame_error_pulse`, `dut.loopback_payload_tvalid`, `dut.loopback_payload_tready` | Service magic/opcode не уходят как payload; malformed frame выставляет diagnostic. |
+| Arbiter/status | `dut.axis_tx_arbiter.status_sel`, `dut.axis_tx_arbiter.loopback_sel`, `dut.axis_tx_arbiter.normal_sel`, `dut.status_frame_active`, `dut.status_req`, `dut.status_payload_block`, `dut.service_status_policy.status_payload_hold_ff`, `dut.tx_axis_*` | Приоритет TX: status выше loopback, loopback выше normal; payload не теряется во время status window. |
+| FIFO/payload | `dut.normal_fifo_empty`, `dut.loopback_fifo_empty`, `dut.loopback_fifo_wen`, `dut.loopback_fifo_ren`, `dut.loopback_fifo_wdata`, `dut.loopback_fifo_rdata` | Normal payload идет из GPIO в TX; loopback payload пишется в loopback FIFO и возвращается в TX. |
+| Testbench result | `failure_count`, `cov_missing_bins`, `tx_words_n`, `rx_words_n`, `tx_total_words_n`, `exp_words_n` | В конце regression: `failure_count=0`, `cov_missing_bins=0`, счетчики слов соответствуют сценарию. |
+
+Для обычной отладки достаточно открыть FT601 pins, `dut.ft601_fsm.state`, все `*_axis_tvalid/tready/tdata/tkeep`, arbiter selects, `status_payload_block`, `loopback_fifo_*`, `failure_count` и `cov_missing_bins`.
 
 ### Сценарии использования
 
@@ -244,6 +261,5 @@ Host-side проверка выполняется через D3XX-утилиту
 | `rtl/packer8to32.v` | Собирает GPIO-байты и `GPIO_STROB` в 32-битные слова с маской `BE`. |
 | `rtl/rst_sync.v` | Синхронизатор reset для локального clock-domain. |
 | `rtl/bit_sync.v` | Синхронизатор одиночного бита между clock-domain. |
-| `rtl/pulse_sync.v` | Синхронизатор импульса между clock-domain. |
 
-Ограничения лежат в `rtl/callistoS6.ucf`. Основной SystemVerilog testbench находится в `tb/`; старый Verilog-стенд - `rtl/testbench.v`. Проверка со стороны ПК находится в `software/`.
+Ограничения лежат в `rtl/callistoS6.ucf`. Основной SystemVerilog testbench находится в `tb/`. Проверка со стороны ПК находится в `software/`.

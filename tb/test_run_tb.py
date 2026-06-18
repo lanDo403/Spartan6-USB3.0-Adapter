@@ -55,6 +55,40 @@ class RunTbTests(unittest.TestCase):
             shutil.rmtree(tmp_root)
             shutil.rmtree(outside_root)
 
+    def test_menu_continues_after_action_until_exit(self):
+        class Args(object):
+            vivado = r"C:\Vivado\bin"
+            seed = "random"
+            keep = False
+
+        choices = ["3", "0"]
+        calls = []
+        old_input = getattr(run_tb, "input", None)
+        old_open_latest_log = run_tb.open_latest_log
+
+        def fake_input(_prompt):
+            return choices.pop(0)
+
+        def fake_open_latest_log(repo_root):
+            calls.append(repo_root)
+            return 7
+
+        try:
+            run_tb.input = fake_input
+            run_tb.open_latest_log = fake_open_latest_log
+
+            rc = run_tb.show_menu("repo", Args())
+
+            self.assertEqual(0, rc)
+            self.assertEqual(["repo"], calls)
+            self.assertEqual([], choices)
+        finally:
+            if old_input is None:
+                del run_tb.input
+            else:
+                run_tb.input = old_input
+            run_tb.open_latest_log = old_open_latest_log
+
 
 if __name__ == "__main__":
     unittest.main()

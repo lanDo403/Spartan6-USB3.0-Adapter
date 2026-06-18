@@ -814,26 +814,26 @@
    task tb_cov_sample_passive(input [5:0] prev_fsm_state_i);
       begin
          if (dut.ft_rst_n_i === 1'b1) begin
-            if (ft601_mon.wr_n === 1'b0)
+            if (ft601_mon.monitor_cb.wr_n === 1'b0)
                cov_req_ft_direction_tx = cov_req_ft_direction_tx + 1;
-            if ((ft601_mon.rd_n === 1'b0) || (ft601_mon.oe_n === 1'b0))
+            if ((ft601_mon.monitor_cb.rd_n === 1'b0) || (ft601_mon.monitor_cb.oe_n === 1'b0))
                cov_req_ft_direction_rx = cov_req_ft_direction_rx + 1;
             if (dut.ft601_fsm.state === TB_COV_FSM_TURNAROUND)
                cov_req_ft_direction_turnaround = cov_req_ft_direction_turnaround + 1;
 `ifdef TB_HAS_SV_COVERGROUP
-            if (ft601_mon.wr_n === 1'b0)
+            if (ft601_mon.monitor_cb.wr_n === 1'b0)
                native_ft601_direction_cg.sample(tb_cov_direction_event(TB_COV_DIR_TX, 0));
-            if ((ft601_mon.rd_n === 1'b0) || (ft601_mon.oe_n === 1'b0))
+            if ((ft601_mon.monitor_cb.rd_n === 1'b0) || (ft601_mon.monitor_cb.oe_n === 1'b0))
                native_ft601_direction_cg.sample(tb_cov_direction_event(TB_COV_DIR_RX, 0));
             if (dut.ft601_fsm.state === TB_COV_FSM_TURNAROUND)
                native_ft601_direction_cg.sample(tb_cov_direction_event(TB_COV_DIR_TURN, 1));
 `endif
 
-            if ((ft601_mon.txe_n === 1'b1) &&
+            if ((ft601_mon.monitor_cb.txe_n === 1'b1) &&
                 (dut.status_frame_active || dut.status_req))
                cov_req_txe_backpressure_status = cov_req_txe_backpressure_status + 1;
 `ifdef TB_HAS_SV_COVERGROUP
-            if ((ft601_mon.txe_n === 1'b1) &&
+            if ((ft601_mon.monitor_cb.txe_n === 1'b1) &&
                 (dut.status_frame_active || dut.status_req))
                native_backpressure_cg.sample(TB_COV_IGNORE,
                                              tb_cov_backpressure_txe_event(1,
@@ -870,15 +870,16 @@
 `endif
             end
 
-            if (loopback_payload_axis_mon.valid && loopback_payload_axis_mon.ready) begin
-               if (loopback_payload_axis_mon.keep == FULL_BE)
+            if (loopback_payload_axis_mon.monitor_cb.valid &&
+                loopback_payload_axis_mon.monitor_cb.ready) begin
+               if (loopback_payload_axis_mon.monitor_cb.keep == FULL_BE)
                   cov_req_router_payload_loopback_full = cov_req_router_payload_loopback_full + 1;
-               else if (loopback_payload_axis_mon.keep != {BE_LEN{1'b0}})
+               else if (loopback_payload_axis_mon.monitor_cb.keep != {BE_LEN{1'b0}})
                   cov_req_router_payload_loopback_partial = cov_req_router_payload_loopback_partial + 1;
 `ifdef TB_HAS_SV_COVERGROUP
                native_router_cg.sample(tb_cov_router_event(TB_COV_ROUTE_PAYLOAD,
                                                            TB_COV_MODE_LOOPBACK,
-                                                           tb_cov_keep_class(loopback_payload_axis_mon.keep)));
+                                                           tb_cov_keep_class(loopback_payload_axis_mon.monitor_cb.keep)));
 `endif
             end
 
@@ -926,32 +927,39 @@
                                                                  TB_COV_FSM_CAUSE_RX_COMPLETE));
 `endif
 
-            if ((ft_rx_axis_mon.valid && !ft_rx_axis_mon.ready) ||
-                (normal_axis_mon.valid && !normal_axis_mon.ready) ||
-                (loopback_payload_axis_mon.valid && !loopback_payload_axis_mon.ready) ||
-                (loopback_axis_mon.valid && !loopback_axis_mon.ready) ||
-                (status_axis_mon.valid && !status_axis_mon.ready) ||
-                (tx_axis_mon.valid && !tx_axis_mon.ready))
+            if ((ft_rx_axis_mon.monitor_cb.valid && !ft_rx_axis_mon.monitor_cb.ready) ||
+                (normal_axis_mon.monitor_cb.valid && !normal_axis_mon.monitor_cb.ready) ||
+                (loopback_payload_axis_mon.monitor_cb.valid &&
+                 !loopback_payload_axis_mon.monitor_cb.ready) ||
+                (loopback_axis_mon.monitor_cb.valid && !loopback_axis_mon.monitor_cb.ready) ||
+                (status_axis_mon.monitor_cb.valid && !status_axis_mon.monitor_cb.ready) ||
+                (tx_axis_mon.monitor_cb.valid && !tx_axis_mon.monitor_cb.ready))
                cov_req_axis_stall_seen = cov_req_axis_stall_seen + 1;
 `ifdef TB_HAS_SV_COVERGROUP
             native_axis_cg.sample(TB_COV_AXIS_FT_RX,
                                   tb_cov_axis_stall_event(TB_COV_AXIS_FT_RX,
-                                                          ft_rx_axis_mon.valid && !ft_rx_axis_mon.ready));
+                                                          ft_rx_axis_mon.monitor_cb.valid &&
+                                                          !ft_rx_axis_mon.monitor_cb.ready));
             native_axis_cg.sample(TB_COV_AXIS_NORMAL,
                                   tb_cov_axis_stall_event(TB_COV_AXIS_NORMAL,
-                                                          normal_axis_mon.valid && !normal_axis_mon.ready));
+                                                          normal_axis_mon.monitor_cb.valid &&
+                                                          !normal_axis_mon.monitor_cb.ready));
             native_axis_cg.sample(TB_COV_AXIS_LOOPBACK_PAYLOAD,
                                   tb_cov_axis_stall_event(TB_COV_AXIS_LOOPBACK_PAYLOAD,
-                                                          loopback_payload_axis_mon.valid && !loopback_payload_axis_mon.ready));
+                                                          loopback_payload_axis_mon.monitor_cb.valid &&
+                                                          !loopback_payload_axis_mon.monitor_cb.ready));
             native_axis_cg.sample(TB_COV_AXIS_LOOPBACK,
                                   tb_cov_axis_stall_event(TB_COV_AXIS_LOOPBACK,
-                                                          loopback_axis_mon.valid && !loopback_axis_mon.ready));
+                                                          loopback_axis_mon.monitor_cb.valid &&
+                                                          !loopback_axis_mon.monitor_cb.ready));
             native_axis_cg.sample(TB_COV_AXIS_STATUS,
                                   tb_cov_axis_stall_event(TB_COV_AXIS_STATUS,
-                                                          status_axis_mon.valid && !status_axis_mon.ready));
+                                                          status_axis_mon.monitor_cb.valid &&
+                                                          !status_axis_mon.monitor_cb.ready));
             native_axis_cg.sample(TB_COV_AXIS_TX,
                                   tb_cov_axis_stall_event(TB_COV_AXIS_TX,
-                                                          tx_axis_mon.valid && !tx_axis_mon.ready));
+                                                          tx_axis_mon.monitor_cb.valid &&
+                                                          !tx_axis_mon.monitor_cb.ready));
 `endif
          end
       end

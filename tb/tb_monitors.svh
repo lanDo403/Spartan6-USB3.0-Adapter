@@ -155,8 +155,8 @@
    // - counts FT and AXIS handshakes
    // - captures transmitted words for raw EP82 reads
    // - delegates externally visible payload checks to the scoreboard
-   // - feeds sampled snapshots into tb_assertions.svh
-   always @(posedge ft601_mon.clk or negedge ft601_mon.reset_n) begin
+   // - feeds clocking-block sampled snapshots into tb_assertions.svh
+   always @(ft601_mon.monitor_cb or negedge ft601_mon.reset_n) begin
       if (!ft601_mon.reset_n) begin
          tx_words_n <= 0;
          rx_words_n <= 0;
@@ -219,44 +219,49 @@
          tb_assert_sampled_protocol_invariants();
          tb_cov_sample_passive(prev_fsm_state);
 
-         prev_ft_rx_axis_stall <= ft_rx_axis_mon.valid && !ft_rx_axis_mon.ready;
-         if (ft_rx_axis_mon.valid && !ft_rx_axis_mon.ready) begin
-            prev_ft_rx_axis_tdata <= ft_rx_axis_mon.data;
-            prev_ft_rx_axis_tkeep <= ft_rx_axis_mon.keep;
+         prev_ft_rx_axis_stall <= ft_rx_axis_mon.monitor_cb.valid &&
+                                  !ft_rx_axis_mon.monitor_cb.ready;
+         if (ft_rx_axis_mon.monitor_cb.valid && !ft_rx_axis_mon.monitor_cb.ready) begin
+            prev_ft_rx_axis_tdata <= ft_rx_axis_mon.monitor_cb.data;
+            prev_ft_rx_axis_tkeep <= ft_rx_axis_mon.monitor_cb.keep;
          end
 
-         prev_normal_axis_stall <= normal_axis_mon.valid && !normal_axis_mon.ready;
-         if (normal_axis_mon.valid && !normal_axis_mon.ready) begin
-            prev_normal_axis_tdata <= normal_axis_mon.data;
-            prev_normal_axis_tkeep <= normal_axis_mon.keep;
+         prev_normal_axis_stall <= normal_axis_mon.monitor_cb.valid &&
+                                   !normal_axis_mon.monitor_cb.ready;
+         if (normal_axis_mon.monitor_cb.valid && !normal_axis_mon.monitor_cb.ready) begin
+            prev_normal_axis_tdata <= normal_axis_mon.monitor_cb.data;
+            prev_normal_axis_tkeep <= normal_axis_mon.monitor_cb.keep;
          end
 
-         prev_loopback_payload_axis_stall <= loopback_payload_axis_mon.valid &&
-                                             !loopback_payload_axis_mon.ready;
-         if (loopback_payload_axis_mon.valid && !loopback_payload_axis_mon.ready) begin
-            prev_loopback_payload_axis_tdata <= loopback_payload_axis_mon.data;
-            prev_loopback_payload_axis_tkeep <= loopback_payload_axis_mon.keep;
+         prev_loopback_payload_axis_stall <= loopback_payload_axis_mon.monitor_cb.valid &&
+                                             !loopback_payload_axis_mon.monitor_cb.ready;
+         if (loopback_payload_axis_mon.monitor_cb.valid &&
+             !loopback_payload_axis_mon.monitor_cb.ready) begin
+            prev_loopback_payload_axis_tdata <= loopback_payload_axis_mon.monitor_cb.data;
+            prev_loopback_payload_axis_tkeep <= loopback_payload_axis_mon.monitor_cb.keep;
          end
 
-         prev_loopback_axis_stall <= loopback_axis_mon.valid && !loopback_axis_mon.ready;
-         if (loopback_axis_mon.valid && !loopback_axis_mon.ready) begin
-            prev_loopback_axis_tdata <= loopback_axis_mon.data;
-            prev_loopback_axis_tkeep <= loopback_axis_mon.keep;
+         prev_loopback_axis_stall <= loopback_axis_mon.monitor_cb.valid &&
+                                     !loopback_axis_mon.monitor_cb.ready;
+         if (loopback_axis_mon.monitor_cb.valid && !loopback_axis_mon.monitor_cb.ready) begin
+            prev_loopback_axis_tdata <= loopback_axis_mon.monitor_cb.data;
+            prev_loopback_axis_tkeep <= loopback_axis_mon.monitor_cb.keep;
          end
 
-         prev_status_axis_stall <= status_axis_mon.valid && !status_axis_mon.ready;
-         if (status_axis_mon.valid && !status_axis_mon.ready) begin
-            prev_status_axis_tdata <= status_axis_mon.data;
-            prev_status_axis_tkeep <= status_axis_mon.keep;
+         prev_status_axis_stall <= status_axis_mon.monitor_cb.valid &&
+                                   !status_axis_mon.monitor_cb.ready;
+         if (status_axis_mon.monitor_cb.valid && !status_axis_mon.monitor_cb.ready) begin
+            prev_status_axis_tdata <= status_axis_mon.monitor_cb.data;
+            prev_status_axis_tkeep <= status_axis_mon.monitor_cb.keep;
          end
 
-         prev_tx_axis_stall <= tx_axis_mon.valid && !tx_axis_mon.ready;
-         if (tx_axis_mon.valid && !tx_axis_mon.ready) begin
-            prev_tx_axis_tdata <= tx_axis_mon.data;
-            prev_tx_axis_tkeep <= tx_axis_mon.keep;
+         prev_tx_axis_stall <= tx_axis_mon.monitor_cb.valid && !tx_axis_mon.monitor_cb.ready;
+         if (tx_axis_mon.monitor_cb.valid && !tx_axis_mon.monitor_cb.ready) begin
+            prev_tx_axis_tdata <= tx_axis_mon.monitor_cb.data;
+            prev_tx_axis_tkeep <= tx_axis_mon.monitor_cb.keep;
          end
 
-         if (ft_rx_axis_mon.valid && ft_rx_axis_mon.ready) begin
+         if (ft_rx_axis_mon.monitor_cb.valid && ft_rx_axis_mon.monitor_cb.ready) begin
             ft_rx_axis_hs_n <= ft_rx_axis_hs_n + 1;
             if (!rx_burst_seen) begin
                if (TB_VERBOSE_STREAM)
@@ -277,33 +282,37 @@
             loopback_fifo_wen_n <= loopback_fifo_wen_n + 1;
          if (dut.loopback_fifo_ren)
             loopback_fifo_ren_n <= loopback_fifo_ren_n + 1;
-         if (tx_axis_mon.valid && tx_axis_mon.ready)
+         if (tx_axis_mon.monitor_cb.valid && tx_axis_mon.monitor_cb.ready)
             tx_axis_hs_n <= tx_axis_hs_n + 1;
 
-         if (!ft601_mon.wr_n) begin
+         if (!ft601_mon.monitor_cb.wr_n) begin
             if (!tx_burst_seen) begin
                if (TB_VERBOSE_STREAM)
                   $display("INFO: FT601 TX burst started");
                tx_burst_seen <= 1'b1;
             end
             if (tx_total_words_n < TX_CAPTURE_WORDS_MAX) begin
-               tx_captured_words[tx_total_words_n] <= ft601_mon.data;
-               tx_captured_be[tx_total_words_n] <= ft601_mon.be;
+               tx_captured_words[tx_total_words_n] <= ft601_mon.monitor_cb.data;
+               tx_captured_be[tx_total_words_n] <= ft601_mon.monitor_cb.be;
             end
             tx_total_words_n <= tx_total_words_n + 1;
 
             if (tx_stream_only_mode) begin
                tx_payload_burst_seen <= 1'b0;
                if (TB_VERBOSE_STREAM)
-                  $display("INFO: TX stream[%0d] data=%h be=%h", tx_total_words_n, ft601_mon.data, ft601_mon.be);
+                  $display("INFO: TX stream[%0d] data=%h be=%h", tx_total_words_n,
+                           ft601_mon.monitor_cb.data, ft601_mon.monitor_cb.be);
             end
             else begin
                tx_payload_burst_seen <= 1'b1;
                if (tx_words_n < 2) begin
                   if (TB_VERBOSE_STREAM)
-                     $display("INFO: TX sample[%0d] data=%h be=%h", tx_words_n, ft601_mon.data, ft601_mon.be);
+                     $display("INFO: TX sample[%0d] data=%h be=%h", tx_words_n,
+                              ft601_mon.monitor_cb.data, ft601_mon.monitor_cb.be);
                end
-               scoreboard_observe_tx_payload_word(tx_words_n, ft601_mon.data, ft601_mon.be);
+               scoreboard_observe_tx_payload_word(tx_words_n,
+                                                  ft601_mon.monitor_cb.data,
+                                                  ft601_mon.monitor_cb.be);
                tx_words_n <= tx_words_n + 1;
             end
          end
@@ -311,15 +320,15 @@
             tx_payload_burst_seen <= 1'b0;
          end
 
-         if (!ft601_mon.rd_n)
+         if (!ft601_mon.monitor_cb.rd_n)
             rx_active_cycles_n <= rx_active_cycles_n + 1;
-         if (!ft601_mon.oe_n)
+         if (!ft601_mon.monitor_cb.oe_n)
             oe_active_cycles_n <= oe_active_cycles_n + 1;
 
-         prev_ft_oe_n  <= ft601_mon.oe_n;
-         prev_ft_rd_n  <= ft601_mon.rd_n;
-         prev_ft_wr_n  <= ft601_mon.wr_n;
-         prev_ft_txe_n_neg <= ft601_mon.txe_n;
+         prev_ft_oe_n  <= ft601_mon.monitor_cb.oe_n;
+         prev_ft_rd_n  <= ft601_mon.monitor_cb.rd_n;
+         prev_ft_wr_n  <= ft601_mon.monitor_cb.wr_n;
+         prev_ft_txe_n_neg <= ft601_mon.monitor_cb.txe_n;
          prev_fsm_state <= dut.ft601_fsm.state;
          prev_cmd_mode_state <= dut.cmd_decoder.mode_state_ff;
          prev_status_payload_hold <= dut.service_status_policy.status_payload_hold_ff;
