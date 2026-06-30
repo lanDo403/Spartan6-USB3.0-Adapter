@@ -89,33 +89,21 @@ module ft601_wrapper #(
 	);
 
 	// Register active-low availability flags before core logic uses them.
+	// Output strobes are still gated and registered at this pin boundary.
 	always @(negedge clk_o or negedge boundary_rst_n) begin
 		if (!boundary_rst_n) begin
 			txe_n_ff <= 1'b1;
 			rxf_n_ff <= 1'b1;
-		end
-		else begin
-			txe_n_ff <= txe_n_ibuf;
-			rxf_n_ff <= rxf_n_ibuf;
-		end
-	end
-
-	assign txe_n_o = txe_n_ff;
-	assign rxf_n_o = rxf_n_ff;
-
-	// Gate outbound strobes with registered FT601 availability flags at the pin boundary.
-	always @(negedge clk_o or negedge boundary_rst_n) begin
-		if (!boundary_rst_n) begin
 			oe_n_o_ff <= 1'b1;
 			wr_n_o_ff <= 1'b1;
 			rd_n_o_ff <= 1'b1;
 		end
 		else begin
-			// Use registered FT601 flags at the output boundary; raw pad flags must
-			// not feed core strobes or FIFO read paths.
-			oe_n_o_ff <= oe_n_i | rxf_n_ff;
-			wr_n_o_ff <= wr_n_i | txe_n_ff;
-			rd_n_o_ff <= rd_n_i | rxf_n_ff;
+			txe_n_ff <= txe_n_ibuf;
+			rxf_n_ff <= rxf_n_ibuf;
+			oe_n_o_ff <= oe_n_i | rxf_n_ibuf;
+			wr_n_o_ff <= wr_n_i | txe_n_ibuf;
+			rd_n_o_ff <= rd_n_i | rxf_n_ibuf;
 		end
 	end
 
@@ -146,6 +134,8 @@ module ft601_wrapper #(
 		.I(rd_n_o_ff),
 		.O(RD_N)
 	);
+	assign txe_n_o = txe_n_ff;
+	assign rxf_n_o = rxf_n_ff;
 
 	// Register TX data and tri-state enables before driving the bidirectional bus.
 	always @(negedge clk_o or negedge boundary_rst_n) begin

@@ -388,6 +388,11 @@
       begin
          timeout = 0;
          last_count = tx_words_n;
+         // TXE_N is registered inside the DUT and final strobes are gate-checked
+         // at the wrapper boundary, so the host model keeps TXE_N stable during
+         // a continuous burst and models backpressure before opening the window.
+         if ((gap_interval > 0) && (gap_cycles > 0))
+            tb_cov_mark_txe_backpressure();
          @(posedge ft_clk);
          ft_set_txe_now(1'b0);
 
@@ -398,14 +403,6 @@
             if (tx_words_n != last_count) begin
                last_count = tx_words_n;
                timeout = 0;
-               if ((tx_words_n < expected_count) &&
-                   (gap_interval > 0) &&
-                   ((tx_words_n % gap_interval) == 0)) begin
-                  tb_cov_mark_txe_backpressure();
-                  ft_set_txe_now(1'b1);
-                  wait_ft_cycles(gap_cycles);
-                  ft_set_txe_now(1'b0);
-               end
             end
             else begin
                timeout = timeout + 1;

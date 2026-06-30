@@ -521,6 +521,9 @@ bool DoReadToFile(FT_HANDLE h,
             nullptr);
         const ThroughputTimePoint read_end = ThroughputNow();
 
+
+        std::cout << "FT_ReadPipe: status=" << StatusToStr(read_status) << ", got=" << got << "\n";
+
         if (read_status == FT_TIMEOUT) {
             // Idle stream is not an error; keep polling until the user stops it.
             continue;

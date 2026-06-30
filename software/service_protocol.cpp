@@ -9,9 +9,6 @@
 
 namespace {
 
-// Bound the scan so a missing status frame becomes a controlled error.
-constexpr size_t STATUS_SCAN_WORD_LIMIT = 4096u;
-
 // Current RTL uses only bits [5:0] in status_word.
 constexpr uint32_t STATUS_RESERVED_MASK = 0xFFFFFFC0u;
 
@@ -39,53 +36,61 @@ bool ReadStatusFrame(FT_HANDLE h,
                      uint32_t& status_word,
                      std::string& err,
                      FT_STATUS* last_status) {
-    size_t discarded_words = 0;
 
-    // Payload or stale words can be ahead of the service response in EP82.
-    while (discarded_words < STATUS_SCAN_WORD_LIMIT) {
-        std::vector<uint32_t> word;
-        if (!ReadExactWords(h, 1, word, err, last_status)) {
+    // 2 status words:
+    // [0] STATUS_MAGIC
+    // [1] status_word
+    std::vector<uint32_t> frame(2u, 0u);
+
+    ULONG got = 0;
+    const ULONG expected_bytes = static_cast<ULONG>(frame.size() * sizeof(uint32_t));
+
+    const FT_STATUS st = FT_ReadPipe(
+        h,
+        IN_PIPE,
+        reinterpret_cast<PUCHAR>(frame.data()),
+        expected_bytes,
+        &got,
+        nullptr
+        );
+    if (last_status != nullptr) {
+        *last_status = st;
+    }
+
+    std::cout << "Status FT_ReadPipe: status=" << StatusToStr(st) << ", got=" << got << "/" << expected_bytes << " bytes\n";
+
+    if (got >= sizeof(uint32_t)) {
+        PrintHex32("Received status word[0]: ", frame[0]);
+    }
+
+    if (got >= 2u * sizeof(uint32_t)) {
+        PrintHex32("Received status word[1]: ", frame[1]);
+    }
+
+    if (got == expected_bytes) {
+        if (frame[0] != STATUS_MAGIC) {
+            std::ostringstream oss;
+            oss << "Protocol error: expected STATUS_MAGIC 0x" << std::hex << std::setw(8)
+                << std::setfill('0') << STATUS_MAGIC << ", received 0x" << std::setw(8) << frame[0];
+            err = oss.str();
             return false;
         }
-
-        if (word[0] != STATUS_MAGIC) {
-            ++discarded_words;
-            continue;
-        }
-
-        std::vector<uint32_t> status;
-        if (!ReadExactWords(h, 1, status, err, last_status)) {
+        if (!LooksLikeStatusWord(frame[1])) {
+            std::ostringstream oss;
+            oss << "Protocol error: invalid status word 0x" << std::hex << std::setw(8) << std::setfill('0')
+                << frame[1];
+            err = oss.str();
             return false;
         }
-
-        if (!LooksLikeStatusWord(status[0])) {
-            // Treat a false STATUS_MAGIC hit as stale data and keep scanning.
-            discarded_words += 2u;
-            continue;
-        }
-
-        if (discarded_words != 0u) {
-            std::cout << "WARNING: discarded " << discarded_words
-                      << " stale word(s) before STATUS_MAGIC.\n";
-        }
-
-        status_word = status[0];
+        status_word = frame[1];
         return true;
     }
 
-    {
-        if (last_status != nullptr) {
-            *last_status = FT_OTHER_ERROR;
-        }
-        AbortPipeBestEffort(h, IN_PIPE);
-        std::ostringstream oss;
-        oss << "Protocol error: STATUS_MAGIC 0x" << std::hex
-            << std::setw(8) << std::setfill('0') << STATUS_MAGIC
-            << " was not found within " << std::dec
-            << STATUS_SCAN_WORD_LIMIT << " words";
-        err = oss.str();
-        return false;
-    }
+    std::ostringstream oss;
+    oss << "Incomplete status response: status=" << StatusToStr(st) << ", received " << got << "/" << expected_bytes << " bytes";
+
+    err = oss.str();
+    return false;
 }
 
 bool RequestStatus(FT_HANDLE h,

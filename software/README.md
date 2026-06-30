@@ -20,7 +20,27 @@
 - показывает flat console menu.
 
 
-## Структура исходников
+## Структура директории
+
+```text
+software/
+├── main.cpp                    # Console menu, dispatch операций и retry/reopen flow
+├── ft601_device.h/.cpp         # D3XX device open, pipe discovery, raw read/write и cleanup
+├── service_protocol.h/.cpp     # CMD/status protocol, opcodes и декодирование status_word
+├── payload_test.h/.cpp         # Write test payload и Read payload to file
+├── throughput.h/.cpp           # Расчет скорости payload-операций
+├── app_log.h/.cpp              # log.txt и timestamp-маркеры операций
+├── FTD3XX.h                    # Локальный заголовок D3XX
+├── FTD3XXWU.dll                # DLL для запуска рядом с .exe
+├── WU_FTD3XXLib/               # Import libraries и DLL FTDI D3XX
+├── WU_FTD3XX_Driver/           # Драйвер FTDI D3XX
+├── README.md                   # Этот файл
+└── *_raw_tx.bin, *_raw_rx.bin   # Timestamped payload dumps, создаются при ручных тестах
+```
+
+`.o`, `.exe`, `log.txt` и payload dumps являются локальными результатами сборки/запуска. Исходная логика приложения находится в `*.cpp` и `*.h`.
+
+## Роли исходников
 
 - `main.cpp` — меню, dispatch операций и retry/reopen flow.
 - `app_log.h/.cpp` — запись системных сообщений в `log.txt` без логирования отрисовки меню. Каждая выбранная операция дополнительно получает timestamp-маркер начала и конца, чтобы сопоставлять лог с ChipScope-захватами.
@@ -57,7 +77,9 @@
 
 Service-команды выполняются в stop-and-wait режиме. `SET_*`, `CLR_*` и `CMD_FT601_RESET` только отправляют команду; статус читается отдельно через пункт `Get FPGA status`.
 
-`ReadStatusFrame` читает `EP82` до появления корректной пары `STATUS_MAGIC + status_word`. Если перед status frame в endpoint остались старые payload-слова, программа пропускает их с предупреждением. Поиск ограничен, чтобы ошибка протокола не превращалась в бесконечное ожидание.
+`ReadStatusFrame` после `CMD_GET_STATUS` читает из `EP82` ровно `8` байт: `STATUS_MAGIC` и `status_word`. Это короткое blocking-чтение, отдельное от потокового raw payload-read. Если пришло меньше `8` байт, первое слово не равно `STATUS_MAGIC` или второе слово не похоже на `status_word`, операция считается protocol error.
+
+`Read payload to file` использует `FT_SetStreamPipe` только на время raw payload capture. После остановки по `q` программа вызывает `FT_ClearStreamPipe` и возвращает обычный timeout для `EP82`, поэтому следующий `Get FPGA status` работает как короткий status-read, а не как продолжение потокового чтения.
 
 ## Меню
 
@@ -73,6 +95,7 @@ Service-команды выполняются в stop-and-wait режиме. `SE
 Важно:
 - `Write test payload` только пишет raw-поток в `EP02`; в `normal mode` это не является echo-тестом, потому что normal TX path идет от внешнего GPIO-источника;
 - `Read payload to file` — это потоковое payload-чтение до `q`, а не чтение статуса; внутри используется `FT_SetStreamPipe`, короткий timeout для проверки клавиши остановки, `FT_ClearStreamPipe` после остановки и возврат обычного timeout для коротких status-read операций;
+- после остановки пункта `2` можно сразу выполнять `Get FPGA status`: программа уже вернула `EP82` из stream-режима в обычный режим чтения;
 - status frame читается только через `Get FPGA status`.
 
 ## Ручная loopback-проверка
@@ -123,5 +146,5 @@ cd .\software
 - При ошибке записи выполняется `FT_AbortPipe(0x02)`.
 - При ошибке чтения или protocol error выполняется `FT_AbortPipe(0x82)`.
 - При disconnect-статусах (`FT_DEVICE_NOT_CONNECTED`, `FT_DEVICE_NOT_FOUND`, `FT_INVALID_HANDLE`) и `FT_OTHER_ERROR` утилита делает попытку reopen и повторяет операцию один раз.
-- Если `STATUS_MAGIC` не найден в ограниченном окне поиска или следующее слово не похоже на `status_word`, это protocol error.
+- Если status-read получил меньше `8` байт, первое слово не равно `STATUS_MAGIC` или второе слово не похоже на `status_word`, это protocol error.
 - `CMD_FT601_RESET` управляет только внешним `RESET_N` FT601. Он не сбрасывает RTL-логику ПЛИС, FIFO, режим или диагностические флаги.
